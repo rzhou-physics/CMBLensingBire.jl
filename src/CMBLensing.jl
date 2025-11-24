@@ -1,4 +1,3 @@
-
 module CMBLensing
 
 using Adapt
@@ -101,7 +100,7 @@ export
     firsthalf, BlockDiagIEB, Fourier, FuncOp, get_max_lensing_step,
     get_Cℓ, get_Cℓ, get_Dℓ, get_ρℓ, get_ℓ⁴Cℓ, gpu, gradhess, gradient, HighPass,
     IEBFourier, IEBMap, Cℓs, IQUAzFourier, IQUFourier, IQUMap, kde,
-    lasthalf, LazyBinaryOp, LenseBasis, LenseFlow, FieldOp, logpdf, load_camb_Cℓs,
+    lasthalf, LazyBinaryOp, LenseBasis, LenseFlow, BireFlow, FieldOp, logpdf, load_camb_Cℓs,
     load_chains, load_nolensing_sim, load_sim, LowPass, make_mask, Map, MAP_joint, MAP_marg,
     mean_std_and_errors, MidPass, mix, Mixed, nan2zero, noiseCℓs,
     ParamDependentOp, pixwin, PowerLens, precompute!!, ProjLambert, ProjEquiRect, ProjHealpix, project,
@@ -115,6 +114,7 @@ export gibbs_initialize_f!, gibbs_initialize_ϕ!, gibbs_initialize_θ!,
     gibbs_sample_f!, gibbs_sample_ϕ!, gibbs_sample_slice_θ!, 
     gibbs_mix!, gibbs_unmix!, gibbs_postprocess!, 
     once_every, start_after_burnin, mass_matrix_ϕ, hmc_step
+
 
 # util
 include("util.jl")
@@ -135,6 +135,7 @@ include("batching.jl")
 # lensing operators
 include("lenseflow.jl")
 include("powerlens.jl")
+include("bireflow.jl")
 
 # field types
 include("proj_cartesian.jl")
@@ -191,4 +192,3 @@ end
 @compile_workload include("precompile.jl")
 
 end
-
