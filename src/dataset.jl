@@ -46,21 +46,43 @@ logprior(ds::DataSet; Ω...) = ds.logprior(;Ω...)
     logprior = (;_...) -> 0 # default no prior
 end
 
-@composite @kwdef mutable struct BaseDataSet <: DataSet
+# @composite @kwdef mutable struct BaseDataSet <: DataSet
+#     NoLensingDataSet...
+#     Cϕ               # ϕ covariance
+#     Cf̃ = nothing     # lensed field covariance (not always needed)
+#     D  = I           # mixing matrix for mixed parametrization
+#     G  = I           # reparametrization for ϕ
+#     L  = LenseFlow   # lensing operator, possibly cached for memory reuse
+#     Nϕ = nothing     # some estimate of the ϕ noise, used in several places for preconditioning
+# end
+
+@composite @kwdef mutable struct BaseDataSet <: DataSet # New BaseDataSet
     NoLensingDataSet...
-    Cϕ               # ϕ covariance
-    Cf̃ = nothing     # lensed field covariance (not always needed)
-    D  = I           # mixing matrix for mixed parametrization
-    G  = I           # reparametrization for ϕ
-    L  = LenseFlow   # lensing operator, possibly cached for memory reuse
-    Nϕ = nothing     # some estimate of the ϕ noise, used in several places for preconditioning
+    Cϕ               # lensing covariance
+    Cα               # birefringence covariance
+    Cf̃ = nothing
+    D  = I
+    G  = I
+    R  = BireStatic  # birefringence operator
+    L  = LenseFlow
+    Nϕ = nothing
 end
 
-@fwdmodel function (ds::BaseDataSet)(; f, ϕ, θ=(;), d=ds.d)
-    @unpack Cf, Cϕ, Cn, L, M, B = ds
+# @fwdmodel function (ds::BaseDataSet)(; f, ϕ, θ=(;), d=ds.d)
+#     @unpack Cf, Cϕ, Cn, L, M, B = ds
+#     f ~ MvNormal(0, Cf(θ))
+#     ϕ ~ MvNormal(0, Cϕ(θ))
+#     f̃ ← L(ϕ) * f
+#     μ = M(θ) * (B(θ) * f̃)
+#     d ~ MvNormal(μ, Cn(θ))
+# end
+
+@fwdmodel function (ds::BaseDataSet)(; f, ϕ, α, θ=(;), d=ds.d) # New fwdmodel
+    @unpack Cf, Cϕ, Cα, Cn, L, R, M, B = ds
     f ~ MvNormal(0, Cf(θ))
     ϕ ~ MvNormal(0, Cϕ(θ))
-    f̃ ← L(ϕ) * f
+    α ~ MvNormal(0, Cα(θ)) # Sampling alpha based on covariance
+    f̃ ← L(ϕ) * (R(α) * f) # Adding birefringence before lensing
     μ = M(θ) * (B(θ) * f̃)
     d ~ MvNormal(μ, Cn(θ))
 end
@@ -73,10 +95,39 @@ end
 end
 
 # performance optimization (shouldn't need this once we have Diffractor)
-function gradientf_logpdf(ds::BaseDataSet; f, ϕ, θ=(;), d=ds.d)
-    @unpack Cf, Cϕ, Cn, L, M, B = ds
-    (Lϕ, Mθ, Bθ) = (L(ϕ), M(θ), B(θ))
-    Lϕ' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * (d - Mθ * (Bθ * (Lϕ * f)))))) - pinv(Cf(θ)) * f
+# function gradientf_logpdf(ds::BaseDataSet; f, ϕ, θ=(;), d=ds.d)
+#     @unpack Cf, Cϕ, Cn, L, M, B = ds
+#     (Lϕ, Mθ, Bθ) = (L(ϕ), M(θ), B(θ))
+#     Lϕ' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * (d - Mθ * (Bθ * (Lϕ * f)))))) - pinv(Cf(θ)) * f
+# end
+
+# function gradientf_logpdf(ds::BaseDataSet; f, ϕ, α, θ=(;), d=ds.d)
+#     @unpack Cf, Cϕ, Cα, Cn, L, R, M, B = ds
+#     Lϕ = L(ϕ)
+#     Rα = R(α)
+
+#     LϕRα = Lϕ ∘ Rα
+
+#     Mθ = M(θ)
+#     Bθ = B(θ)
+
+#     # return LϕRα' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * (d - Mθ * (Bθ * (Lϕ * f)))))) - pinv(Cf(θ)) * f
+#     return LϕRα' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * (d - Mθ * (Bθ * (LϕRα * f)))))) - pinv(Cf(θ)) * f
+# end
+
+function gradientf_logpdf(ds::BaseDataSet; f, ϕ, α, θ=(;), d=ds.d)
+    @unpack Cf, Cn, L, R, M, B = ds
+
+    Lϕ = L(ϕ)
+    Rα = R(α)
+    LϕRα = Lϕ ∘ Rα
+
+    Mθ = M(θ)
+    Bθ = B(θ)
+
+    resid = d - Mθ * (Bθ * (LϕRα * f))
+
+    return LϕRα' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * resid))) - pinv(Cf(θ)) * f
 end
 
 
@@ -100,6 +151,12 @@ function mix(ds::DataSet; f, ϕ, θ=(;), Ω...)
     (; f°, ϕ°, θ, Ω...)
 end
 
+# function mix(ds::DataSet; f, ϕ, α, θ=(;), Ω...)
+#     @unpack D, G, R, L = ds
+#     f° = L(ϕ) * (R(α) * (D(θ) * f))
+#     ϕ° = G(θ) * ϕ
+#     (; f°, ϕ°, θ, Ω...)
+# end
 
 """
     unmix(f°, ϕ°,    ds::DataSet)
@@ -115,6 +172,13 @@ function unmix(ds::DataSet; f°, ϕ°, θ=(;), Ω...)
     f = D(θ) \ (L(ϕ) \ f°)
     (; f, ϕ, θ, Ω...)
 end
+
+# function unmix(ds::DataSet; f°, ϕ°, α, θ=(;), Ω...)
+#     @unpack D, G, R, L = ds
+#     ϕ = G(θ) \ ϕ°
+#     f = D(θ) \ (R(α) \ (L(ϕ) \ f°))
+#     return (; f, ϕ, α, θ, Ω...)
+# end
 
 simulate(rng::AbstractRNG, mds::Mixed{<:DataSet}; Ω...) = mix(mds.ds; simulate(rng, mds.ds; Ω...)...)
 
@@ -272,6 +336,15 @@ function load_sim(;
     if (Cn == nothing); Cn = Cn̂; end
     Cf = ParamDependentOp((;r=r₀,   _...)->(Cfs + (T(r)/r₀)*Cft))
     Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->(T(Aϕ) * Cϕ₀))
+    Cα = Cϕ
+
+    # ℓ = Cℓ.total.ϕϕ.ℓ
+    # Cαℓ = 1e-7 ./ (ℓ .* (ℓ .+ 1) .+ eps())
+    # Cα = Cℓ_to_Cov(:I, proj, Cαℓ) # alpha covariance
+    # ℓ = Cℓ.total.ϕϕ.ℓ
+    # Cαℓ = 1e-7 ./ (ℓ .* (ℓ .+ 1) .+ eps())
+    # Cαℓ_struct = CMBLensing.Cℓs(ℓ=ℓ, Cℓ=Cαℓ)
+    # Cα = Cℓ_to_Cov(:I, proj, Cαℓ_struct)
     
     # data mask
     if (M == nothing)
@@ -306,10 +379,13 @@ function load_sim(;
     Lϕ = precompute!!(L(zero(diag(Cϕ))), zero(diag(Cf)))
 
     # put everything in DataSet
-    ds = BaseDataSet(;Cn, Cn̂, Cf, Cf̃, Cϕ, M, M̂, B, B̂, D, L=Lϕ)
+    # ds = BaseDataSet(;Cn, Cn̂, Cf, Cf̃, Cϕ, M, M̂, B, B̂, D, L=Lϕ)
+    ds = BaseDataSet(; Cn, Cn̂, Cf, Cf̃, Cϕ, Cα, M, M̂, B, B̂, D, R = BireStatic, L = Lϕ)
     
     # simulate data
-    @unpack f,f̃,ϕ,d = simulate(rng, ds)
+    # @unpack f,f̃,ϕ,d = simulate(rng, ds)
+    @unpack f,f̃,ϕ,α,d = simulate(rng, ds)
+    α = ϕ
     ds.d = d
 
     # with the DataSet created, we now more conveniently create the mixing matrices D and G
@@ -333,7 +409,8 @@ function load_sim(;
         ds.L = precompute!!(L(ϕ*batch(ones(Int,Nbatch))), ds.d)
     end
     
-    return (;f, f̃, ϕ, d, ds, ds₀=ds(), Cℓ, proj)
+    # return (;f, f̃, ϕ, d, ds, ds₀=ds(), Cℓ, proj)
+    return (;f, f̃, ϕ, α, d, ds, ds₀=ds(), Cℓ, proj)
     
 end
 
@@ -344,11 +421,13 @@ function load_nolensing_sim(;
     L = lensed_data ? LenseFlow : I,
     kwargs...
 )
-    @unpack f, f̃, ϕ, ds, ds₀, Cℓ, proj = load_sim(; L, kwargs...)
+    # @unpack f, f̃, ϕ, ds, ds₀, Cℓ, proj = load_sim(; L, kwargs...)
+    @unpack f, f̃, ϕ, α, ds, ds₀, Cℓ, proj = load_sim(; L, kwargs...)
     @unpack d, Cf, Cf̃, Cn, Cn̂, M, M̂, B, B̂ = ds
     Cf_nl = lensed_covariance ? Cf̃ : Cf
     ds_nl = NoLensingDataSet(; d, Cf=Cf_nl, Cn, Cn̂, M, M̂, B, B̂)
-    (;f, f̃, ϕ, ds=ds_nl, ds₀=ds_nl(), Cℓ, proj)
+    # (;f, f̃, ϕ, ds=ds_nl, ds₀=ds_nl(), Cℓ, proj)
+    (;f, f̃, ϕ, α, ds=ds_nl, ds₀=ds_nl(), Cℓ, proj)
 end
 
 
