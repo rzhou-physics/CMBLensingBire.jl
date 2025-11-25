@@ -36,9 +36,8 @@ end
 BireStatic(α::Field) = BireStatic{real(eltype(α))}(α)
 
 function (R::BireStatic)(f::Field)
-    α = R.α
-
-    f_iqu = IQUFourier(f)
+    α = Map(R.α)
+    f_iqu = IQUMap(f)
     Q = f_iqu.Q
     U = f_iqu.U
 
@@ -49,7 +48,7 @@ function (R::BireStatic)(f::Field)
     f_iqu_new.arr[:, :, end-1] .= Q_new.arr
     f_iqu_new.arr[:, :, end]   .= U_new.arr
 
-    return IEBFourier(f_iqu_new)
+    return IQUFourier(f_iqu_new)
 end
 
 import Base: *
