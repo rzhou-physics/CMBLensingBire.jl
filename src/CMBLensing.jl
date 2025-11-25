@@ -100,7 +100,7 @@ export
     firsthalf, BlockDiagIEB, Fourier, FuncOp, get_max_lensing_step,
     get_Cℓ, get_Cℓ, get_Dℓ, get_ρℓ, get_ℓ⁴Cℓ, gpu, gradhess, gradient, HighPass,
     IEBFourier, IEBMap, Cℓs, IQUAzFourier, IQUFourier, IQUMap, kde,
-    lasthalf, LazyBinaryOp, LenseBasis, LenseFlow, BireFlow, FieldOp, logpdf, load_camb_Cℓs,
+    lasthalf, LazyBinaryOp, LenseBasis, LenseFlow, FieldOp, logpdf, load_camb_Cℓs,
     load_chains, load_nolensing_sim, load_sim, LowPass, make_mask, Map, MAP_joint, MAP_marg,
     mean_std_and_errors, MidPass, mix, Mixed, nan2zero, noiseCℓs,
     ParamDependentOp, pixwin, PowerLens, precompute!!, ProjLambert, ProjEquiRect, ProjHealpix, project,
@@ -108,6 +108,8 @@ export
     simulate, SymmetricFuncOp, symplectic_integrate, Taylens, toCℓ, toDℓ,
     ud_grade, unbatch, unmix, Ð, Ł,  
     ℓ², ℓ⁴, ∇, ∇², ∇ᵢ, ∇ⁱ
+
+export BireStatic, BireStaticOp
 
 # bunch of sampling-related exports
 export gibbs_initialize_f!, gibbs_initialize_ϕ!, gibbs_initialize_θ!, 
@@ -130,12 +132,13 @@ include("field_vectors.jl")
 include("base_fields.jl")
 include("specialops.jl")
 include("flowops.jl")
+include("staticops.jl")
 include("batching.jl")
 
 # lensing operators
 include("lenseflow.jl")
 include("powerlens.jl")
-include("bireflow.jl")
+include("birestatic.jl")
 
 # field types
 include("proj_cartesian.jl")
