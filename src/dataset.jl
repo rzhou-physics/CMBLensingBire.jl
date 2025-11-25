@@ -336,15 +336,12 @@ function load_sim(;
     if (Cn == nothing); Cn = Cn̂; end
     Cf = ParamDependentOp((;r=r₀,   _...)->(Cfs + (T(r)/r₀)*Cft))
     Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->(T(Aϕ) * Cϕ₀))
-    Cα = Cϕ
 
-    # ℓ = Cℓ.total.ϕϕ.ℓ
-    # Cαℓ = 1e-7 ./ (ℓ .* (ℓ .+ 1) .+ eps())
-    # Cα = Cℓ_to_Cov(:I, proj, Cαℓ) # alpha covariance
-    # ℓ = Cℓ.total.ϕϕ.ℓ
-    # Cαℓ = 1e-7 ./ (ℓ .* (ℓ .+ 1) .+ eps())
-    # Cαℓ_struct = CMBLensing.Cℓs(ℓ=ℓ, Cℓ=Cαℓ)
-    # Cα = Cℓ_to_Cov(:I, proj, Cαℓ_struct)
+    ℓ = Cℓ.total.ϕϕ.ℓ    # multipoles
+    Aα = 0.01
+    Cαα_ℓ = (Aα * 1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())   # C_L^{αα}
+    Cαα_struct = Cℓs(ℓ, Cαα_ℓ)     # Cℓs struct (ℓ, C_L^{αα})
+    Cα = Cℓ_to_Cov(:I, proj, Cαα_struct)    # map-space covariance operator
     
     # data mask
     if (M == nothing)
@@ -385,7 +382,7 @@ function load_sim(;
     # simulate data
     # @unpack f,f̃,ϕ,d = simulate(rng, ds)
     @unpack f,f̃,ϕ,α,d = simulate(rng, ds)
-    α = ϕ
+    # α = ϕ
     ds.d = d
 
     # with the DataSet created, we now more conveniently create the mixing matrices D and G
