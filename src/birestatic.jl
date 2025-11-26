@@ -14,14 +14,14 @@
 #     Q = f_iqu.Q
 #     U = f_iqu.U
 
-#     Q_new = cos.(2 .* α) .* Q .- sin.(2 .* α) .* U
-#     U_new = sin.(2 .* α) .* Q .+ cos.(2 .* α) .* U
+#     Q_rot = cos.(2 .* α) .* Q .- sin.(2 .* α) .* U
+#     U_rot = sin.(2 .* α) .* Q .+ cos.(2 .* α) .* U
 
-#     f_iqu_new = copy(f_iqu)
-#     f_iqu_new.arr[:, :, end-1] .= Q_new.arr
-#     f_iqu_new.arr[:, :, end]   .= U_new.arr
+#     f_iqu_rot = copy(f_iqu)
+#     f_iqu_rot.arr[:, :, end-1] .= Q_rot.arr
+#     f_iqu_rot.arr[:, :, end]   .= U_rot.arr
 
-#     return IEBFourier(f_iqu_new)
+#     return IEBFourier(f_iqu_rot)
 # end
 
 # import Base: *
@@ -38,17 +38,18 @@ BireStatic(α::Field) = BireStatic{real(eltype(α))}(α)
 function (R::BireStatic)(f::Field)
     α = Map(R.α)
     f_iqu = IQUMap(f)
+
     Q = f_iqu.Q
     U = f_iqu.U
 
-    Q_new =  cos.(2 .* α) .* Q .- sin.(2 .* α) .* U
-    U_new =  sin.(2 .* α) .* Q .+ cos.(2 .* α) .* U
+    Q_rot =  cos.(2 .* α) .* Q .- sin.(2 .* α) .* U
+    U_rot =  sin.(2 .* α) .* Q .+ cos.(2 .* α) .* U
 
-    f_iqu_new = copy(f_iqu)
-    f_iqu_new.arr[:, :, end-1] .= Q_new.arr
-    f_iqu_new.arr[:, :, end]   .= U_new.arr
+    f_iqu_rot = copy(f_iqu)
+    f_iqu_rot.arr[:, :, end-1] .= Q_rot.arr
+    f_iqu_rot.arr[:, :, end]   .= U_rot.arr
 
-    return IQUFourier(f_iqu_new)
+    return IQUFourier(f_iqu_rot)
 end
 
 import Base: *

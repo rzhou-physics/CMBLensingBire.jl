@@ -337,8 +337,9 @@ function load_sim(;
     Cf = ParamDependentOp((;r=r₀,   _...)->(Cfs + (T(r)/r₀)*Cft))
     Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->(T(Aϕ) * Cϕ₀))
 
+    # α covariance
     ℓ = Cℓ.total.ϕϕ.ℓ    # multipoles
-    Aα = 1
+    Aα = 0.1
     Cαα_ℓ = (Aα * 1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())   # C_L^{αα}
     Cαα_struct = Cℓs(ℓ, Cαα_ℓ)     # Cℓs struct (ℓ, C_L^{αα})
     Cα = Cℓ_to_Cov(:I, proj, Cαα_struct)    # map-space covariance operator
