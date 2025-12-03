@@ -66,7 +66,7 @@ sample_f(ds::DataSet, args...; kwargs...) = sample_f(Random.default_rng(), ds, a
 # optimization, since Zygote is ~50% slower than the old hand-written
 # code even after the above hack. shouldn't need this once we have
 # Diffractor. the following is the fallback which just uses Zygote:
-gradientf_logpdf(ds::DataSet; f, Ω...) = gradient(f -> logpdf(ds; f, Ω...), f)[1]
+# gradientf_logpdf(ds::DataSet; f, Ω...) = gradient(f -> logpdf(ds; f, Ω...), f)[1]
 
 
 
@@ -115,8 +115,9 @@ contains the history of steps during the run.
 MAP_joint(ds::DataSet, args...; kwargs...) = MAP_joint((;), ds, args...; kwargs...)
 function MAP_joint(
     θ, 
-    ds :: DataSet,
-    Ωstart = FieldTuple(ϕ=Map(zero(diag(ds.Cϕ))));
+    ds :: DataSet;
+    # Ωstart = FieldTuple(ϕ=Map(zero(diag(ds.Cϕ)))),
+    Ωstart = FieldTuple(ϕ = Map(zero(diag(ds.Cϕ))), α = Map(zero(diag(ds.Cα))),),
     nsteps = 20,
     minsteps = 0,
     fstart = nothing,
@@ -132,9 +133,9 @@ function MAP_joint(
     aggressive_gc = false,
 )
 
-    if isfinite(nburnin_update_hessian)
-        keys((;Ωstart...,)) == (:ϕ,) || error("nburnin_update_hessian only implemented for (f,ϕ)-only maximization.")
-    end
+    # if isfinite(nburnin_update_hessian) # don't check now
+    #     keys((;Ωstart...,)) == (:ϕ,) || error("nburnin_update_hessian only implemented for (f,ϕ)-only maximization.")
+    # end
 
     sample_or_argmax_f = 
         quasi_sample == false ? argmaxf_logpdf :
@@ -170,17 +171,53 @@ function MAP_joint(
             aggressive_gc && cuda_gc()
         end
 
+        # # gradient
+        # t_ϕ = @elapsed begin
+        #     ## ϕ step
+        #     @unpack f° = (Ω° = mix(dsθ; f, Ω..., θ))
+        #     Ω° = FieldTuple(delete(Ω°, (:f°, :θ)))
+        #     ∇Ω°_logpdf, = @⌛ gradient(Ω°->logpdf(Mixed(dsθ); f°, Ω°..., θ), Ω°)
+        #     # Hessian
+        #     if step > nburnin_update_hessian
+        #         HΩ°⁻¹_unsmooth = Diagonal(abs.(Fourier(Ω°.ϕ° - prevΩ°.ϕ°) ./ Fourier(∇Ω°_logpdf.ϕ° - prev_∇Ω°_logpdf.ϕ°)))
+        #         HΩ°⁻¹_smooth = Cℓ_to_Cov(:I, f.proj, smooth(ℓ⁴*cov_to_Cℓ(HΩ°⁻¹_unsmooth), xscale=:log, yscale=:log, smoothing=0.05)/ℓ⁴)
+        #         HΩ° = Diagonal(FieldTuple(ϕ°=diag(pinv(HΩ°⁻¹_smooth))))
+        #     elseif HΩ° == nothing
+        #         HΩ° = Hessian_logpdf_preconditioner(keys((;Ω°...,)), dsθ)
+        #     end
+        #     # line search
+        #     ΔΩ° = pinv(HΩ°) * ∇Ω°_logpdf
+        #     T = real(eltype(f))
+        #     if prior_deprojection_factor != 0
+        #         ΔΩ°_perp = pinv(HΩ°) * gradient(ΔΩ° -> logprior(dsθ; unmix(dsθ; f°, ΔΩ°...)...), ΔΩ°)[1]
+        #         ΔΩ° .-= T(prior_deprojection_factor * dot(ΔΩ°,ΔΩ°_perp) * pinv(dot(ΔΩ°_perp,ΔΩ°_perp))) .* ΔΩ°_perp
+        #     end
+        #     αmax = @something(αmax_initial, 2α)
+        #     soln = @ondemand(Optim.optimize)(T(0), T(αmax), @ondemand(Optim.Brent)(); abs_tol=T(αtol)) do α
+        #         Ω°′ = Ω° + T(α) * ΔΩ°
+        #         total_logpdf = @⌛(sum(unbatch(-(logpdf(Mixed(dsθ); f°, Ω°′..., θ)))))
+        #         isnan(total_logpdf) ? T(α/αmax) * prevfloat(T(Inf)) : total_logpdf # workaround for https://github.com/JuliaNLSolvers/Optim.jl/issues/828
+        #     end
+        #     α = T(soln.minimizer)
+        #     Ω° += α * ΔΩ°
+        # end
+
         # gradient
         t_ϕ = @elapsed begin
-            ## ϕ step
+            ## ϕ-α step
             @unpack f° = (Ω° = mix(dsθ; f, Ω..., θ))
             Ω° = FieldTuple(delete(Ω°, (:f°, :θ)))
             ∇Ω°_logpdf, = @⌛ gradient(Ω°->logpdf(Mixed(dsθ); f°, Ω°..., θ), Ω°)
             # Hessian
-            if step > nburnin_update_hessian
-                HΩ°⁻¹_unsmooth = Diagonal(abs.(Fourier(Ω°.ϕ° - prevΩ°.ϕ°) ./ Fourier(∇Ω°_logpdf.ϕ° - prev_∇Ω°_logpdf.ϕ°)))
-                HΩ°⁻¹_smooth = Cℓ_to_Cov(:I, f.proj, smooth(ℓ⁴*cov_to_Cℓ(HΩ°⁻¹_unsmooth), xscale=:log, yscale=:log, smoothing=0.05)/ℓ⁴)
-                HΩ° = Diagonal(FieldTuple(ϕ°=diag(pinv(HΩ°⁻¹_smooth))))
+            # if step > nburnin_update_hessian
+            #     HΩ°⁻¹_unsmooth = Diagonal(abs.(Fourier(Ω°.ϕ° - prevΩ°.ϕ°) ./ Fourier(∇Ω°_logpdf.ϕ° - prev_∇Ω°_logpdf.ϕ°)))
+            #     HΩ°⁻¹_smooth = Cℓ_to_Cov(:I, f.proj, smooth(ℓ⁴*cov_to_Cℓ(HΩ°⁻¹_unsmooth), xscale=:log, yscale=:log, smoothing=0.05)/ℓ⁴)
+            #     HΩ° = Diagonal(FieldTuple(ϕ°=diag(pinv(HΩ°⁻¹_smooth))))
+            if step > nburnin_update_hessian # smoothing only for ϕ°
+                @unpack Cα, Nα = dsθ
+                Hϕ⁻¹_unsmooth = Diagonal(abs.(Fourier(Ω°.ϕ° - prevΩ°.ϕ°) ./ Fourier(∇Ω°_logpdf.ϕ° - prev_∇Ω°_logpdf.ϕ°)))
+                Hϕ⁻¹_smooth = Cℓ_to_Cov(:I, f.proj, smooth(ℓ⁴ * cov_to_Cℓ(Hϕ⁻¹_unsmooth), xscale=:log, yscale=:log, smoothing=0.05) / ℓ⁴)
+                HΩ° = Diagonal(FieldTuple(ϕ° = diag(pinv(Hϕ⁻¹_smooth)), α° = diag(pinv(Cα) + pinv(Nα))))
             elseif HΩ° == nothing
                 HΩ° = Hessian_logpdf_preconditioner(keys((;Ω°...,)), dsθ)
             end

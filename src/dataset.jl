@@ -66,6 +66,7 @@ end
     R  = BireStatic  # birefringence operator
     L  = LenseFlow
     Nϕ = nothing
+    Nα
 end
 
 # @fwdmodel function (ds::BaseDataSet)(; f, ϕ, θ=(;), d=ds.d)
@@ -120,7 +121,7 @@ function gradientf_logpdf(ds::BaseDataSet; f, ϕ, α, θ=(;), d=ds.d)
 
     Lϕ = L(ϕ)
     Rα = R(α)
-    LϕRα = Lϕ ∘ Rα
+    LϕRα = Lϕ * Rα
 
     Mθ = M(θ)
     Bθ = B(θ)
@@ -132,9 +133,32 @@ end
 
 
 ## mixing
+# function Distributions.logpdf(mds::Mixed{<:DataSet}; θ=(;), Ω...)
+#     ds = mds.ds
+#     logpdf(ds; unmix(ds; θ, Ω...)...) - logdet(ds.D, θ) - logdet(ds.G, θ)
+# end
+
 function Distributions.logpdf(mds::Mixed{<:DataSet}; θ=(;), Ω...)
     ds = mds.ds
-    logpdf(ds; unmix(ds; θ, Ω...)...) - logdet(ds.D, θ) - logdet(ds.G, θ)
+
+    # 1. unmix all mixed variables
+    unmixed = unmix(ds; θ, Ω...)
+    # unmixed = (; f, ϕ, α, θ, ...)
+
+    # 2. compute original-model logpdf
+    lp = logpdf(ds; unmixed...)
+
+    # 3. Jacobian corrections
+    # f° = L(ϕ) R(α) D f   → only D contributes (others depend on ϕ,α)
+    J_D = logdet(ds.D, θ)
+
+    # ϕ° = G ϕ         → one logdet(G)
+    J_Gϕ = logdet(ds.G, θ)
+
+    # α° = G α         → second logdet(G)
+    J_Gα = logdet(ds.G, θ)
+
+    return lp - J_D - J_Gϕ - J_Gα
 end
 
 """
@@ -144,19 +168,20 @@ Compute the mixed `(f°, ϕ°)` from the unlensed field `f` and lensing potentia
 `ϕ`, given the definition of the mixing matrices in `ds` evaluated at parameters
 `θ` (or at fiducial values if no `θ` provided).
 """
-function mix(ds::DataSet; f, ϕ, θ=(;), Ω...)
-    @unpack D, G, L = ds
-    f° = L(ϕ) * D(θ) * f
-    ϕ° = G(θ) * ϕ
-    (; f°, ϕ°, θ, Ω...)
-end
-
-# function mix(ds::DataSet; f, ϕ, α, θ=(;), Ω...)
-#     @unpack D, G, R, L = ds
-#     f° = L(ϕ) * (R(α) * (D(θ) * f))
+# function mix(ds::DataSet; f, ϕ, θ=(;), Ω...)
+#     @unpack D, G, L = ds
+#     f° = L(ϕ) * D(θ) * f
 #     ϕ° = G(θ) * ϕ
 #     (; f°, ϕ°, θ, Ω...)
 # end
+
+function mix(ds::DataSet; f, ϕ, α, θ=(;), Ω...)
+    @unpack D, G, R, L = ds
+    f° = L(ϕ) * (R(α) * (D(θ) * f))
+    ϕ° = G(θ) * ϕ
+    α° = G(θ) * α
+    (; f°, ϕ°, α°, θ, Ω...)
+end
 
 """
     unmix(f°, ϕ°,    ds::DataSet)
@@ -166,19 +191,20 @@ Compute the unmixed/unlensed `(f, ϕ)` from the mixed field `f°` and mixed
 lensing potential `ϕ°`, given the definition of the mixing matrices in `ds`
 evaluated at parameters `θ` (or at fiducial values if no `θ` provided). 
 """
-function unmix(ds::DataSet; f°, ϕ°, θ=(;), Ω...)
-    @unpack D, G, L = ds
-    ϕ = G(θ) \ ϕ°
-    f = D(θ) \ (L(ϕ) \ f°)
-    (; f, ϕ, θ, Ω...)
-end
-
-# function unmix(ds::DataSet; f°, ϕ°, α, θ=(;), Ω...)
-#     @unpack D, G, R, L = ds
+# function unmix(ds::DataSet; f°, ϕ°, θ=(;), Ω...)
+#     @unpack D, G, L = ds
 #     ϕ = G(θ) \ ϕ°
-#     f = D(θ) \ (R(α) \ (L(ϕ) \ f°))
-#     return (; f, ϕ, α, θ, Ω...)
+#     f = D(θ) \ (L(ϕ) \ f°)
+#     (; f, ϕ, θ, Ω...)
 # end
+
+function unmix(ds::DataSet; f°, ϕ°, α°, θ=(;), Ω...)
+    @unpack D, G, R, L = ds
+    ϕ = G(θ) \ ϕ°
+    α = G(θ) \ α°
+    f = D(θ) \ ((R(α) * L(ϕ)) \ f°)
+    return (; f, ϕ, α, θ, Ω...)
+end
 
 simulate(rng::AbstractRNG, mds::Mixed{<:DataSet}; Ω...) = mix(mds.ds; simulate(rng, mds.ds; Ω...)...)
 
@@ -200,7 +226,18 @@ function Hessian_logpdf_preconditioner(Ω::Val{(:ϕ°,)}, ds::DataSet)
     Diagonal(FieldTuple(ϕ°=diag(pinv(Cϕ)+pinv(Nϕ))))
 end
 
+function Hessian_logpdf_preconditioner(Ω::Val{(:α°,)}, ds::DataSet) # add hessian wrt alpha
+    @unpack Cα, Nα = ds
+    Diagonal(FieldTuple(α° = diag(pinv(Cα) + pinv(Nα))))
+end
 
+function Hessian_logpdf_preconditioner(::Val{(:ϕ°, :α°)}, ds::DataSet) # add hessian wrt both phi and alpha
+    @unpack Cϕ, Nϕ, Cα, Nα = ds
+    Diagonal(FieldTuple(
+        ϕ° = diag(pinv(Cϕ) + pinv(Nϕ)),
+        α° = diag(pinv(Cα) + pinv(Nα)),
+    ))
+end
 
 @doc doc"""
 
@@ -343,6 +380,10 @@ function load_sim(;
     Cαα_ℓ = (Aα * 1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())   # C_L^{αα}
     Cαα_struct = Cℓs(ℓ, Cαα_ℓ)     # Cℓs struct (ℓ, C_L^{αα})
     Cα = Cℓ_to_Cov(:I, proj, Cαα_struct)    # map-space covariance operator
+
+    # α white noise with sigma=1e-2
+    σ² = 1e-4
+    Nα = Cℓ_to_Cov(:I, proj, Cℓs(ℓ, fill(σ², length(ℓ))))
     
     # data mask
     if (M == nothing)
@@ -378,7 +419,7 @@ function load_sim(;
 
     # put everything in DataSet
     # ds = BaseDataSet(;Cn, Cn̂, Cf, Cf̃, Cϕ, M, M̂, B, B̂, D, L=Lϕ)
-    ds = BaseDataSet(; Cn, Cn̂, Cf, Cf̃, Cϕ, Cα, M, M̂, B, B̂, D, R = BireStatic, L = Lϕ)
+    ds = BaseDataSet(; Cn, Cn̂, Cf, Cf̃, Cϕ, Cα, Nα, M, M̂, B, B̂, D, R = BireStatic, L = Lϕ)
     
     # simulate data
     # @unpack f,f̃,ϕ,d = simulate(rng, ds)
