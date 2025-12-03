@@ -117,7 +117,7 @@ function MAP_joint(
     θ, 
     ds :: DataSet;
     # Ωstart = FieldTuple(ϕ=Map(zero(diag(ds.Cϕ)))),
-    Ωstart = FieldTuple(ϕ = Map(zero(diag(ds.Cϕ))), α = Map(zero(diag(ds.Cα))),),
+    Ωstart = FieldTuple(ϕ = Map(zero(diag(ds.Cϕ))), α = Map(zero(diag(ds.Cα))),), # default phi and alpha = 0
     nsteps = 20,
     minsteps = 0,
     fstart = nothing,
@@ -203,7 +203,7 @@ function MAP_joint(
         # end
 
         # gradient
-        t_ϕ = @elapsed begin
+        t_ϕα = @elapsed begin
             ## ϕ-α step
             @unpack f° = (Ω° = mix(dsθ; f, Ω..., θ))
             Ω° = FieldTuple(delete(Ω°, (:f°, :θ)))
@@ -249,7 +249,7 @@ function MAP_joint(
             ("α",          α),
             ("ΔΩ°_norm",   @sprintf("%.2g", ΔΩ°_norm)),
             ("CG",         "$(length(argmaxf_logpdf_history)) iterations ($(@sprintf("%.2f",t_f)) sec)"), 
-            ("Linesearch", "$(soln.iterations) bisections ($(@sprintf("%.2f",t_ϕ)) sec)")
+            ("Linesearch", "$(soln.iterations) bisections ($(@sprintf("%.2f",t_ϕα)) sec)")
         ]
         next!(pbar; showvalues)
         push!(history, select((;f°,f,Ω°...,Ω...,∇Ω°_logpdf,total_logpdf,α,αmax,ΔΩ°,ΔΩ°_norm,logpdf=_logpdf,HΩ°,argmaxf_logpdf_history), history_keys))
