@@ -376,7 +376,7 @@ function load_sim(;
 
     # α covariance
     ℓ = Cℓ.total.ϕϕ.ℓ    # multipoles
-    Aα = 0.1
+    Aα = 1
     Cαα_ℓ = (Aα * 1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())   # C_L^{αα}
     Cαα_struct = Cℓs(ℓ, Cαα_ℓ)     # Cℓs struct (ℓ, C_L^{αα})
     Cα = Cℓ_to_Cov(:I, proj, Cαα_struct)    # map-space covariance operator
