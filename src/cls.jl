@@ -56,6 +56,7 @@ getindex(fc::FuncCℓs, idx) = fc.f.(idx)
 broadcastable(fc::FuncCℓs) = Ref(fc)
 ℓ² = FuncCℓs(ℓ -> ℓ^2)
 ℓ⁴ = FuncCℓs(ℓ -> ℓ^4)
+ℓ²_plus_ℓ = FuncCℓs(ℓ -> ℓ^2 + ℓ)
 toDℓ = FuncCℓs(ℓ -> ℓ*(ℓ+1)/2π)
 toCℓ = FuncCℓs(ℓ -> 2π/(ℓ*(ℓ+1)))
 

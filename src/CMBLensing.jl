@@ -107,7 +107,7 @@ export
     QUAzFourier, QUFourier, QUMap, RK4Solver, sample_f, sample_joint, shiftℓ, 
     simulate, SymmetricFuncOp, symplectic_integrate, Taylens, toCℓ, toDℓ,
     ud_grade, unbatch, unmix, Ð, Ł,  
-    ℓ², ℓ⁴, ∇, ∇², ∇ᵢ, ∇ⁱ
+    ℓ², ℓ²_plus_ℓ, ℓ⁴, ∇, ∇², ∇ᵢ, ∇ⁱ
 
 export BireStatic, BireStaticOp
 

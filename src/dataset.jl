@@ -83,7 +83,8 @@ end
     f ~ MvNormal(0, Cf(θ))
     ϕ ~ MvNormal(0, Cϕ(θ))
     α ~ MvNormal(0, Cα(θ)) # Sampling alpha based on covariance
-    f̃ ← L(ϕ) * (R(α) * f) # Adding birefringence before lensing
+    f̃ ← L(ϕ) * (R(α) * f) # before
+    # f̃ ← R(α) * (L(ϕ) * f) # after
     μ = M(θ) * (B(θ) * f̃)
     d ~ MvNormal(μ, Cn(θ))
 end
@@ -121,7 +122,8 @@ function gradientf_logpdf(ds::BaseDataSet; f, ϕ, α, θ=(;), d=ds.d)
 
     Lϕ = L(ϕ)
     Rα = R(α)
-    LϕRα = Lϕ * Rα
+    LϕRα = Lϕ * Rα # before
+    # LϕRα = Rα * Lϕ # after
 
     Mθ = M(θ)
     Bθ = B(θ)
@@ -177,7 +179,8 @@ Compute the mixed `(f°, ϕ°)` from the unlensed field `f` and lensing potentia
 
 function mix(ds::DataSet; f, ϕ, α, θ=(;), Ω...)
     @unpack D, G, R, L = ds
-    f° = L(ϕ) * (R(α) * (D(θ) * f))
+    f° = L(ϕ) * (R(α) * (D(θ) * f)) # before
+    # f° = R(α) * (L(ϕ) * (D(θ) * f)) # after
     ϕ° = G(θ) * ϕ
     α° = G(θ) * α
     (; f°, ϕ°, α°, θ, Ω...)
@@ -202,7 +205,8 @@ function unmix(ds::DataSet; f°, ϕ°, α°, θ=(;), Ω...)
     @unpack D, G, R, L = ds
     ϕ = G(θ) \ ϕ°
     α = G(θ) \ α°
-    f = D(θ) \ ((R(α) * L(ϕ)) \ f°)
+    f = D(θ) \ ((R(α) * L(ϕ)) \ f°) # before
+    # f = D(θ) \ ((L(ϕ) * R(α)) \ f°) # after
     return (; f, ϕ, α, θ, Ω...)
 end
 
@@ -376,13 +380,13 @@ function load_sim(;
 
     # α covariance
     ℓ = Cℓ.total.ϕϕ.ℓ    # multipoles
-    Aα = 1
+    Aα = 0.1
     Cαα_ℓ = (Aα * 1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())   # C_L^{αα}
     Cαα_struct = Cℓs(ℓ, Cαα_ℓ)     # Cℓs struct (ℓ, C_L^{αα})
     Cα = Cℓ_to_Cov(:I, proj, Cαα_struct)    # map-space covariance operator
 
     # α white noise with sigma=1e-2
-    σ² = 1e-4
+    σ² = 1e2
     Nα = Cℓ_to_Cov(:I, proj, Cℓs(ℓ, fill(σ², length(ℓ))))
     
     # data mask

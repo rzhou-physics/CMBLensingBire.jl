@@ -31,9 +31,9 @@ import Base: *, adjoint, /
 \(R::BireStatic, f::Field) = BireStatic(-R.α)(f)
 \(Radj::Adjoint{<:Any,<:BireStatic}, f::Field) = BireStatic(Radj.parent.α)(f)
 
+# Make it at least work, but alpha won't update
 import ChainRulesCore: rrule, NoTangent, ZeroTangent, AbstractTangent, Tangent, unthunk
 
-# ChainRulesCore rrule definitions
 function rrule(::typeof(*), R::BireStatic, f::Field)
     α = Map(R.α)
     f_iqu = IQUMap(f)
@@ -141,13 +141,94 @@ function rrule(::Type{<:BireStatic{T}}, α::Field) where T
     return y, pullback
 end
 
+# Make alpha update correctly
+import Zygote
+
+Zygote.@adjoint function *(R::BireStatic, f::Field)
+    y = R(f)
+    
+    α_field = R.α
+    f_iqu = IQUMap(f)
+    Q = f_iqu.Q
+    U = f_iqu.U
+    
+    cos2α = cos.(2 .* α_field)
+    sin2α = sin.(2 .* α_field)
+    
+    function back(Δ::Field)
+        
+        Δ_iqu = IQUMap(Δ)
+        ΔQ = Δ_iqu.Q 
+        ΔU = Δ_iqu.U
+        
+        Q_back = cos2α .* ΔQ .+ sin2α .* ΔU
+        U_back = -sin2α .* ΔQ .+ cos2α .* ΔU
+        
+        f_iqu_back = copy(f_iqu)
+        f_iqu_back.arr[:, :, end-1] .= Q_back.arr
+        f_iqu_back.arr[:, :, end]   .= U_back.arr
+        ∇f = IQUFourier(f_iqu_back) 
+        
+        M1 = .-sin2α .* ΔQ .+ cos2α .* ΔU
+        M2 = .-cos2α .* ΔQ .- sin2α .* ΔU
+        
+        ∇α_field = 2 .* ( Q .* M1 .+ U .* M2 ) 
+        
+        ∇R = (α = ∇α_field,)
+        
+        return (∇R, ∇f)
+    end
+    
+    return y, back
+end
+
+Zygote.@adjoint function *(Radj::Adjoint{<:Any,<:BireStatic}, f::Field)
+    R = Radj.parent
+    α_field = R.α
+    
+    y = BireStatic(-α_field)(f)
+    
+    f_iqu = IQUMap(f)
+    Q = f_iqu.Q
+    U = f_iqu.U
+    
+    cos2α = cos.(2 .* α_field)
+    sin2α = sin.(2 .* α_field)
+
+    function back(Δ::Field)
+        
+        ∇f = R(Δ)
+        
+        Δ_iqu = IQUMap(Δ)
+        ΔQ = Δ_iqu.Q 
+        ΔU = Δ_iqu.U
+        
+        M1_neg = sin2α .* ΔQ .+ cos2α .* ΔU
+        M2_neg = .-cos2α .* ΔQ .+ sin2α .* ΔU
+        
+        Δneg_α = 2 .* ( Q .* M1_neg .+ U .* M2_neg )
+        ∇α_field = .-Δneg_α
+        
+        ∇Radj = (parent = (α = ∇α_field,),)
+        
+        return (∇Radj, ∇f)
+    end
+    
+    return y, back
+end
+
+# To surpress certain errors
+import ChainRulesCore: NoTangent, ZeroTangent, AbstractTangent, Tangent
+
 *(R::BireStatic, t::AbstractTangent) = ZeroTangent()
 *(Radj::Adjoint{<:Any,<:BireStatic}, t::AbstractTangent) = ZeroTangent()
 *(t::AbstractTangent, R::BireStatic) = ZeroTangent()
 *(t::AbstractTangent, Radj::Adjoint{<:Any,<:BireStatic}) = ZeroTangent()
 
-import ChainRulesCore: AbstractTangent, ZeroTangent
-
 function Base.:*(t::AbstractTangent, Radj::Adjoint{<:Any, <:CachedLenseFlow})
+    return ZeroTangent()
+end
+
+function Base.:*(Radj::Adjoint{<:Any, <:CachedLenseFlow}, t::AbstractTangent)
     return ZeroTangent()
 end
