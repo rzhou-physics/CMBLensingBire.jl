@@ -341,7 +341,7 @@ function load_sim(;
         @warn "`rfid` will be removed in a future version. Use `fiducial_θ=(r=...,)` instead."
         fiducial_θ = merge(fiducial_θ,(r=rfid,))
     end
-    Aϕ₀ = T(get(fiducial_θ, :Aϕ, 1))
+    # Aϕ₀ = T(get(fiducial_θ, :Aϕ, 1))
     fiducial_θ = Base.structdiff(fiducial_θ, NamedTuple{(:Aϕ,)}) # remove Aϕ key if present
     if (Cℓ == nothing)
         Cℓ = camb(;fiducial_θ..., ℓmax=ℓmax)
@@ -376,17 +376,37 @@ function load_sim(;
     Cn̂  = Cℓ_to_Cov(pol, proj, (Cℓn[k]                for k in ks)...)
     if (Cn == nothing); Cn = Cn̂; end
     Cf = ParamDependentOp((;r=r₀,   _...)->(Cfs + (T(r)/r₀)*Cft))
-    Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->(T(Aϕ) * Cϕ₀))
+
+    # ϕ covariance
+    # Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->(T(Aϕ) * Cϕ₀))
+    ℓmin_ϕ = 100
+    ℓmax_ϕ = 2000
+    Nbins_ϕ = 10
+    ℓedges_ϕ = exp.(range(log(ℓmin_ϕ), log(ℓmax_ϕ), length=Nbins_ϕ+1))
+    Aϕ₀ = ones(T, Nbins_ϕ)
+    Cϕ_base = Cℓ_to_Cov(:I, proj, (Cℓ.total.ϕϕ, ℓedges_ϕ, :Aϕ))
+    Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->Cϕ_base(Aϕ=Aϕ))
 
     # α covariance
-    ℓ = Cℓ.total.ϕϕ.ℓ    # multipoles
-    Aα = 0.1
-    Cαα_ℓ = (Aα * 1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())   # C_L^{αα}
-    Cαα_struct = Cℓs(ℓ, Cαα_ℓ)     # Cℓs struct (ℓ, C_L^{αα})
-    Cα = Cℓ_to_Cov(:I, proj, Cαα_struct)    # map-space covariance operator
+    # ℓ = Cℓ.total.ϕϕ.ℓ    # multipoles
+    # Aα = 0.1
+    # Cαα_ℓ = (Aα * 1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())   # C_L^{αα}
+    # Cαα_struct = Cℓs(ℓ, Cαα_ℓ)     # Cℓs struct (ℓ, C_L^{αα})
+    # Cα = Cℓ_to_Cov(:I, proj, Cαα_struct)    # map-space covariance operator
+
+    ℓ = Cℓ.total.ϕϕ.ℓ
+    Cαα_ℓ = (1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())
+    Cαα_struct = Cℓs(ℓ, Cαα_ℓ)
+    ℓmin_α = 100
+    ℓmax_α = 2000
+    Nbins_α = 1
+    ℓedges_α = exp.(range(log(ℓmin_α), log(ℓmax_α), length=Nbins_α+1))
+    Aα₀ = fill(T(0.1), Nbins_α)
+    Cα_base = Cℓ_to_Cov(:I, proj, (Cαα_struct, ℓedges_α, :Aα))
+    Cα = ParamDependentOp((;Aα=Aα₀, _...)->Cα_base(Aα=Aα))
 
     # α white noise with sigma=1e-2
-    σ² = 1e2
+    σ² = 1e-4
     Nα = Cℓ_to_Cov(:I, proj, Cℓs(ℓ, fill(σ², length(ℓ))))
     
     # data mask
