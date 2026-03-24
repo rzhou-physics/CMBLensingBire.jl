@@ -315,6 +315,14 @@ function load_sim(;
     bandpass_mask = LowPass(3000),
     M = nothing, M̂ = nothing,
 
+    # estimation parameters
+    ℓmin_ϕ = 100,
+    ℓmax_ϕ = 2000,
+    Nbins_ϕ = 10,
+    ℓmin_α = 100,
+    ℓmax_α = 2000,
+    Nbins_α = 3,
+
     # theory
     Cℓ = nothing,
     fiducial_θ = (;),
@@ -379,9 +387,9 @@ function load_sim(;
 
     # ϕ covariance
     # Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->(T(Aϕ) * Cϕ₀))
-    ℓmin_ϕ = 100
-    ℓmax_ϕ = 2000
-    Nbins_ϕ = 10
+    # ℓmin_ϕ = 100
+    # ℓmax_ϕ = 2000
+    # Nbins_ϕ = 10
     ℓedges_ϕ = exp.(range(log(ℓmin_ϕ), log(ℓmax_ϕ), length=Nbins_ϕ+1))
     Aϕ₀ = ones(T, Nbins_ϕ)
     Cϕ_base = Cℓ_to_Cov(:I, proj, (Cℓ.total.ϕϕ, ℓedges_ϕ, :Aϕ))
@@ -397,9 +405,9 @@ function load_sim(;
     ℓ = Cℓ.total.ϕϕ.ℓ
     Cαα_ℓ = (1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())
     Cαα_struct = Cℓs(ℓ, Cαα_ℓ)
-    ℓmin_α = 100
-    ℓmax_α = 2000
-    Nbins_α = 1
+    # ℓmin_α = 100
+    # ℓmax_α = 2000
+    # Nbins_α = 3
     ℓedges_α = exp.(range(log(ℓmin_α), log(ℓmax_α), length=Nbins_α+1))
     Aα₀ = fill(T(0.1), Nbins_α)
     Cα_base = Cℓ_to_Cov(:I, proj, (Cαα_struct, ℓedges_α, :Aα))
