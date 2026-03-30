@@ -319,9 +319,11 @@ function load_sim(;
     ℓmin_ϕ = 100,
     ℓmax_ϕ = 2000,
     Nbins_ϕ = 10,
+    ℓedges_ϕ = exp.(range(log(ℓmin_ϕ), log(ℓmax_ϕ), length=Nbins_ϕ+1)),
     ℓmin_α = 100,
     ℓmax_α = 2000,
-    Nbins_α = 3,
+    Nbins_α = 2,
+    ℓedges_α = exp.(range(log(ℓmin_α), log(ℓmax_α), length=Nbins_α+1)),
 
     # theory
     Cℓ = nothing,
@@ -390,7 +392,7 @@ function load_sim(;
     # ℓmin_ϕ = 100
     # ℓmax_ϕ = 2000
     # Nbins_ϕ = 10
-    ℓedges_ϕ = exp.(range(log(ℓmin_ϕ), log(ℓmax_ϕ), length=Nbins_ϕ+1))
+    # ℓedges_ϕ = exp.(range(log(ℓmin_ϕ), log(ℓmax_ϕ), length=Nbins_ϕ+1))
     Aϕ₀ = ones(T, Nbins_ϕ)
     Cϕ_base = Cℓ_to_Cov(:I, proj, (Cℓ.total.ϕϕ, ℓedges_ϕ, :Aϕ))
     Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->Cϕ_base(Aϕ=Aϕ))
@@ -407,8 +409,8 @@ function load_sim(;
     Cαα_struct = Cℓs(ℓ, Cαα_ℓ)
     # ℓmin_α = 100
     # ℓmax_α = 2000
-    # Nbins_α = 3
-    ℓedges_α = exp.(range(log(ℓmin_α), log(ℓmax_α), length=Nbins_α+1))
+    # Nbins_α = 2
+    # ℓedges_α = exp.(range(log(ℓmin_α), log(ℓmax_α), length=Nbins_α+1))
     Aα₀ = fill(T(0.1), Nbins_α)
     Cα_base = Cℓ_to_Cov(:I, proj, (Cαα_struct, ℓedges_α, :Aα))
     Cα = ParamDependentOp((;Aα=Aα₀, _...)->Cα_base(Aα=Aα))
