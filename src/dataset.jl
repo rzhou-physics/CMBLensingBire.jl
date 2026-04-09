@@ -404,14 +404,21 @@ function load_sim(;
     # Cαα_struct = Cℓs(ℓ, Cαα_ℓ)     # Cℓs struct (ℓ, C_L^{αα})
     # Cα = Cℓ_to_Cov(:I, proj, Cαα_struct)    # map-space covariance operator
 
+    # ℓ = Cℓ.total.ϕϕ.ℓ
+    # Cαα_ℓ = (1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())
+    # Cαα_struct = Cℓs(ℓ, Cαα_ℓ)
+    # # ℓmin_α = 100
+    # # ℓmax_α = 2000
+    # # Nbins_α = 2
+    # # ℓedges_α = exp.(range(log(ℓmin_α), log(ℓmax_α), length=Nbins_α+1))
+    # Aα₀ = fill(T(0.1), Nbins_α)
+    # Cα_base = Cℓ_to_Cov(:I, proj, (Cαα_struct, ℓedges_α, :Aα))
+    # Cα = ParamDependentOp((;Aα=Aα₀, _...)->Cα_base(Aα=Aα))
+
     ℓ = Cℓ.total.ϕϕ.ℓ
-    Cαα_ℓ = (1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())
+    Cαα_ℓ = (0.1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())
     Cαα_struct = Cℓs(ℓ, Cαα_ℓ)
-    # ℓmin_α = 100
-    # ℓmax_α = 2000
-    # Nbins_α = 2
-    # ℓedges_α = exp.(range(log(ℓmin_α), log(ℓmax_α), length=Nbins_α+1))
-    Aα₀ = fill(T(0.1), Nbins_α)
+    Aα₀ = ones(T, Nbins_α)
     Cα_base = Cℓ_to_Cov(:I, proj, (Cαα_struct, ℓedges_α, :Aα))
     Cα = ParamDependentOp((;Aα=Aα₀, _...)->Cα_base(Aα=Aα))
 
