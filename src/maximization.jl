@@ -20,7 +20,7 @@ function argmaxf_logpdf(
     d = ds.d;
     fstart = nothing, 
     preconditioner = :diag, 
-    conjgrad_kwargs = (tol=1e-1,nsteps=500),
+    conjgrad_kwargs = (tol=1e-1,nsteps=100),
     offset = false,
 )
     
@@ -127,7 +127,7 @@ function MAP_joint(
     prior_deprojection_factor = 0,
     nburnin_update_hessian = Inf,
     progress::Bool = true,
-    conjgrad_kwargs = (tol=1e-1, nsteps=500),
+    conjgrad_kwargs = (tol=1e-1, nsteps=100),
     quasi_sample = false,
     history_keys = (:logpdf,),
     aggressive_gc = false,

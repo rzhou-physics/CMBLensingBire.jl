@@ -63,10 +63,11 @@ end
     Cf̃ = nothing
     D  = I
     G  = I
+    J  = I
     R  = BireStatic  # birefringence operator
-    L  = LenseFlow
+    L  = LenseFlow   # lensing operator
     Nϕ = nothing
-    Nα
+    Nα = nothing
 end
 
 # @fwdmodel function (ds::BaseDataSet)(; f, ϕ, θ=(;), d=ds.d)
@@ -133,7 +134,6 @@ function gradientf_logpdf(ds::BaseDataSet; f, ϕ, α, θ=(;), d=ds.d)
     return LϕRα' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * resid))) - pinv(Cf(θ)) * f
 end
 
-
 ## mixing
 # function Distributions.logpdf(mds::Mixed{<:DataSet}; θ=(;), Ω...)
 #     ds = mds.ds
@@ -142,25 +142,7 @@ end
 
 function Distributions.logpdf(mds::Mixed{<:DataSet}; θ=(;), Ω...)
     ds = mds.ds
-
-    # 1. unmix all mixed variables
-    unmixed = unmix(ds; θ, Ω...)
-    # unmixed = (; f, ϕ, α, θ, ...)
-
-    # 2. compute original-model logpdf
-    lp = logpdf(ds; unmixed...)
-
-    # 3. Jacobian corrections
-    # f° = L(ϕ) R(α) D f   → only D contributes (others depend on ϕ,α)
-    J_D = logdet(ds.D, θ)
-
-    # ϕ° = G ϕ         → one logdet(G)
-    J_Gϕ = logdet(ds.G, θ)
-
-    # α° = G α         → second logdet(G)
-    J_Gα = logdet(ds.G, θ)
-
-    return lp - J_D - J_Gϕ - J_Gα
+    logpdf(ds; unmix(ds; θ, Ω...)...) - logdet(ds.D, θ) - logdet(ds.G, θ) - logdet(ds.J, θ)
 end
 
 """
@@ -178,11 +160,10 @@ Compute the mixed `(f°, ϕ°)` from the unlensed field `f` and lensing potentia
 # end
 
 function mix(ds::DataSet; f, ϕ, α, θ=(;), Ω...)
-    @unpack D, G, R, L = ds
-    f° = L(ϕ) * (R(α) * (D(θ) * f)) # before
-    # f° = R(α) * (L(ϕ) * (D(θ) * f)) # after
+    @unpack D, G, J, R, L = ds
+    f° = (L(ϕ) * R(α)) * (D(θ) * f) # birefringence first
     ϕ° = G(θ) * ϕ
-    α° = G(θ) * α
+    α° = J(θ) * α
     (; f°, ϕ°, α°, θ, Ω...)
 end
 
@@ -202,11 +183,10 @@ evaluated at parameters `θ` (or at fiducial values if no `θ` provided).
 # end
 
 function unmix(ds::DataSet; f°, ϕ°, α°, θ=(;), Ω...)
-    @unpack D, G, R, L = ds
+    @unpack D, G, J, R, L = ds
     ϕ = G(θ) \ ϕ°
-    α = G(θ) \ α°
-    f = D(θ) \ ((R(α) * L(ϕ)) \ f°) # before
-    # f = D(θ) \ ((L(ϕ) * R(α)) \ f°) # after
+    α = J(θ) \ α°
+    f = D(θ) \ ((L(ϕ) * R(α)) \ f°) # birefringence first
     return (; f, ϕ, α, θ, Ω...)
 end
 
@@ -230,12 +210,20 @@ function Hessian_logpdf_preconditioner(Ω::Val{(:ϕ°,)}, ds::DataSet)
     Diagonal(FieldTuple(ϕ°=diag(pinv(Cϕ)+pinv(Nϕ))))
 end
 
-function Hessian_logpdf_preconditioner(Ω::Val{(:α°,)}, ds::DataSet) # add hessian wrt alpha
+function Hessian_logpdf_preconditioner(Ω::Val{(:α°,)}, ds::DataSet)
     @unpack Cα, Nα = ds
     Diagonal(FieldTuple(α° = diag(pinv(Cα) + pinv(Nα))))
 end
 
-function Hessian_logpdf_preconditioner(::Val{(:ϕ°, :α°)}, ds::DataSet) # add hessian wrt both phi and alpha
+# function Hessian_logpdf_preconditioner(::Val{(:ϕ°, :α°)}, ds::DataSet) # add hessian wrt both phi and alpha
+#     @unpack Cϕ, Nϕ, Cα, Nα = ds
+#     Diagonal(FieldTuple(
+#         ϕ° = diag(pinv(Cϕ) + pinv(Nϕ)),
+#         α° = diag(pinv(Cα) + pinv(Nα)),
+#     ))
+# end
+
+function Hessian_logpdf_preconditioner(::Val{(:ϕ°, :α°)}, ds::DataSet)
     @unpack Cϕ, Nϕ, Cα, Nα = ds
     Diagonal(FieldTuple(
         ϕ° = diag(pinv(Cϕ) + pinv(Nϕ)),
@@ -334,6 +322,7 @@ function load_sim(;
     rng = MersenneTwister(seed),
     D = nothing,
     G = nothing,
+    J = nothing,
     Nϕ_fac = 2,
     L = LenseFlow,
 
@@ -465,14 +454,42 @@ function load_sim(;
     # simulate data
     # @unpack f,f̃,ϕ,d = simulate(rng, ds)
     @unpack f,f̃,ϕ,α,d = simulate(rng, ds)
-    # α = ϕ
+
     ds.d = d
 
-    # with the DataSet created, we now more conveniently create the mixing matrices D and G
+    # # with the DataSet created, we now more conveniently create the mixing matrices D and G
+    # ds.Nϕ = Nϕ = quadratic_estimate(ds).Nϕ / Nϕ_fac
+    # if (G == nothing)
+    #     G₀ = sqrt(I + 2 * Nϕ * pinv(Cϕ()))
+    #     ds.G = ParamDependentOp((;Aϕ=Aϕ₀, _...)->(pinv(G₀) * sqrt(I + 2 * Nϕ * pinv(Cϕ(Aϕ=Aϕ)))))
+    # end
+    # if (D == nothing)
+    #     σ²len = T(deg2rad(5/60)^2)
+    #     ds.D = ParamDependentOp(
+    #         function (;r=r₀, _...)
+    #             Cfr = Cf(;r=r)
+    #             sqrt((Cfr + (I*σ²len + 2*Cn̂)) * pinv(Cfr))
+    #         end,
+    #     )
+    # end
+
+    # with the DataSet created, we now more conveniently create the mixing matrices D, G and J
     ds.Nϕ = Nϕ = quadratic_estimate(ds).Nϕ / Nϕ_fac
     if (G == nothing)
         G₀ = sqrt(I + 2 * Nϕ * pinv(Cϕ()))
-        ds.G = ParamDependentOp((;Aϕ=Aϕ₀, _...)->(pinv(G₀) * sqrt(I + 2 * Nϕ * pinv(Cϕ(Aϕ=Aϕ)))))
+        ds.G = ParamDependentOp(
+            (;Aϕ=Aϕ₀, _...) -> (pinv(G₀) * sqrt(I + 2 * Nϕ * pinv(Cϕ(Aϕ=Aϕ))))
+        )
+    else
+        ds.G = G
+    end
+    if (J == nothing)
+        J₀ = sqrt(I + 2 * Nα * pinv(Cα()))
+        ds.J = ParamDependentOp(
+            (;Aα=Aα₀, _...) -> (pinv(J₀) * sqrt(I + 2 * Nα * pinv(Cα(Aα=Aα))))
+        )
+    else
+        ds.J = J
     end
     if (D == nothing)
         σ²len = T(deg2rad(5/60)^2)
@@ -482,6 +499,8 @@ function load_sim(;
                 sqrt((Cfr + (I*σ²len + 2*Cn̂)) * pinv(Cfr))
             end,
         )
+    else
+        ds.D = D
     end
 
     if Nbatch != nothing
