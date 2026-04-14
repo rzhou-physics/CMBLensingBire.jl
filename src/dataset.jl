@@ -104,34 +104,15 @@ end
 #     Lϕ' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * (d - Mθ * (Bθ * (Lϕ * f)))))) - pinv(Cf(θ)) * f
 # end
 
-# function gradientf_logpdf(ds::BaseDataSet; f, ϕ, α, θ=(;), d=ds.d)
-#     @unpack Cf, Cϕ, Cα, Cn, L, R, M, B = ds
-#     Lϕ = L(ϕ)
-#     Rα = R(α)
-
-#     LϕRα = Lϕ ∘ Rα
-
-#     Mθ = M(θ)
-#     Bθ = B(θ)
-
-#     # return LϕRα' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * (d - Mθ * (Bθ * (Lϕ * f)))))) - pinv(Cf(θ)) * f
-#     return LϕRα' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * (d - Mθ * (Bθ * (LϕRα * f)))))) - pinv(Cf(θ)) * f
-# end
-
 function gradientf_logpdf(ds::BaseDataSet; f, ϕ, α, θ=(;), d=ds.d)
     @unpack Cf, Cn, L, R, M, B = ds
-
     Lϕ = L(ϕ)
     Rα = R(α)
     LϕRα = Lϕ * Rα # before
     # LϕRα = Rα * Lϕ # after
-
     Mθ = M(θ)
     Bθ = B(θ)
-
-    resid = d - Mθ * (Bθ * (LϕRα * f))
-
-    return LϕRα' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * resid))) - pinv(Cf(θ)) * f
+    return LϕRα' * (Bθ' * (Mθ' * (pinv(Cn(θ)) * (d - Mθ * (Bθ * (LϕRα * f)))))) - pinv(Cf(θ)) * f
 end
 
 ## mixing
@@ -161,10 +142,12 @@ Compute the mixed `(f°, ϕ°)` from the unlensed field `f` and lensing potentia
 
 function mix(ds::DataSet; f, ϕ, α, θ=(;), Ω...)
     @unpack D, G, J, R, L = ds
-    f° = (L(ϕ) * R(α)) * (D(θ) * f) # birefringence first
+    f_unmixed = D(θ) * f
+    f_rotated = R(α) * f_unmixed
+    f° = L(ϕ) * f_rotated
     ϕ° = G(θ) * ϕ
     α° = J(θ) * α
-    (; f°, ϕ°, α°, θ, Ω...)
+    return (; f°, ϕ°, α°, θ, Ω...)
 end
 
 """
@@ -186,7 +169,9 @@ function unmix(ds::DataSet; f°, ϕ°, α°, θ=(;), Ω...)
     @unpack D, G, J, R, L = ds
     ϕ = G(θ) \ ϕ°
     α = J(θ) \ α°
-    f = D(θ) \ ((L(ϕ) * R(α)) \ f°) # birefringence first
+    f_rotated = L(ϕ) \ f°
+    f_unmixed = R(α) \ f_rotated
+    f = D(θ) \ f_unmixed
     return (; f, ϕ, α, θ, Ω...)
 end
 
