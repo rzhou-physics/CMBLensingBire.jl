@@ -91,15 +91,17 @@ function rrule(::typeof(*), R::BireStatic, f::Field)
         Δu = unthunk(Δ)
         Δ_iqu = IQUMap(Δu)
 
+        ΔI = Δ_iqu.I
         ΔQ = Δ_iqu.Q
         ΔU = Δ_iqu.U
 
         # ∂L/∂f = R' Δ = rotation by -α
+        I_back =  ΔI
         Q_back =  cos2α .* ΔQ .+ sin2α .* ΔU
         U_back = -sin2α .* ΔQ .+ cos2α .* ΔU
 
         f_iqu_back = copy(f_iqu)
-        f_iqu_back.arr[:, :, 1] .= zero(I.arr)
+        f_iqu_back.arr[:, :, 1] .= I_back.arr
         f_iqu_back.arr[:, :, 2] .= Q_back.arr
         f_iqu_back.arr[:, :, 3] .= U_back.arr
         ∂f = IEBFourier(f_iqu_back)
@@ -146,22 +148,26 @@ function rrule(::typeof(*), Radj::Adjoint{<:Any,<:BireStatic}, f::Field)
         Δu = unthunk(Δ)
         Δ_iqu = IQUMap(Δu)
 
+        ΔI = Δ_iqu.I
         ΔQ = Δ_iqu.Q
         ΔU = Δ_iqu.U
 
         # ∂L/∂f = R Δ = rotation by +α
+        I_back =  ΔI
         Q_back = cos2α .* ΔQ .- sin2α .* ΔU
         U_back = sin2α .* ΔQ .+ cos2α .* ΔU
 
         f_iqu_back = copy(f_iqu)
-        f_iqu_back.arr[:, :, 1] .= zero(I.arr)
+        f_iqu_back.arr[:, :, 1] .= I_back.arr
         f_iqu_back.arr[:, :, 2] .= Q_back.arr
         f_iqu_back.arr[:, :, 3] .= U_back.arr
         ∂f = IEBFourier(f_iqu_back)
 
         # derivative wrt α for adjoint operator
-        ∂α_from_Q =  2 .* sin2α .* Q .- 2 .* cos2α .* U
-        ∂α_from_U =  2 .* cos2α .* Q .+ 2 .* sin2α .* U
+        # ∂α_from_Q =  2 .* sin2α .* Q .- 2 .* cos2α .* U
+        # ∂α_from_U =  2 .* cos2α .* Q .+ 2 .* sin2α .* U
+        ∂α_from_Q =  -2 .* sin2α .* Q .+ 2 .* cos2α .* U
+        ∂α_from_U =  -2 .* cos2α .* Q .- 2 .* sin2α .* U
 
         ∂α_map = similar(α_map)
         ∂α_map.arr .= ∂α_from_Q.arr .* ΔQ.arr .+ ∂α_from_U.arr .* ΔU.arr

@@ -20,7 +20,7 @@ function argmaxf_logpdf(
     d = ds.d;
     fstart = nothing, 
     preconditioner = :diag, 
-    conjgrad_kwargs = (tol=1e-1,nsteps=100),
+    conjgrad_kwargs = (tol=1e-1,nsteps=500),
     offset = false,
 )
     
@@ -116,7 +116,6 @@ MAP_joint(ds::DataSet, args...; kwargs...) = MAP_joint((;), ds, args...; kwargs.
 function MAP_joint(
     θ, 
     ds :: DataSet;
-    # Ωstart = FieldTuple(ϕ=Map(zero(diag(ds.Cϕ)))),
     Ωstart = FieldTuple(ϕ = Map(zero(diag(ds.Cϕ))), α = Map(zero(diag(ds.Cα))),),
     nsteps = 20,
     minsteps = 0,
@@ -127,7 +126,7 @@ function MAP_joint(
     prior_deprojection_factor = 0,
     nburnin_update_hessian = Inf,
     progress::Bool = true,
-    conjgrad_kwargs = (tol=1e-1, nsteps=100),
+    conjgrad_kwargs = (tol=1e-1, nsteps=500),
     quasi_sample = false,
     history_keys = (:logpdf,),
     aggressive_gc = false,

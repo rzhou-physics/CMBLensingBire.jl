@@ -396,8 +396,8 @@ function load_sim(;
     Cα_base = Cℓ_to_Cov(:I, proj, (Cαα_struct, ℓedges_α, :Aα))
     Cα = ParamDependentOp((;Aα=Aα₀, _...)->Cα_base(Aα=Aα))
 
-    # α white noise with sigma=1e-2
-    σ² = 1e-4
+    # α white noise with sigma=1e-4
+    σ² = 1e-8
     Nα = Cℓ_to_Cov(:I, proj, Cℓs(ℓ, fill(σ², length(ℓ))))
     
     # data mask
