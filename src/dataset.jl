@@ -216,6 +216,96 @@ function Hessian_logpdf_preconditioner(::Val{(:ϕ°, :α°)}, ds::DataSet)
     ))
 end
 
+
+"""
+    local_bire_qe_noise(Cℓ, Cℓn, ℓedges_α; bandpass_mask=I, beamFWHM=0,
+                        white_level=1e-8, max_bin_factor=100)
+
+Return a cheap, local EB-inspired approximation to the anisotropic
+birefringence reconstruction noise `Nα(L)`.
+
+This is intentionally simpler and more conservative than a full quadratic
+estimator. We first build a raw local EB-inspired noise curve, then only use
+its coarse bin-by-bin shape to modulate the known-stable white-noise level.
+This keeps the interface close to the lensing `Nϕ` usage while avoiding the
+instabilities that can appear when the raw local approximation becomes too
+optimistic at high resolution.
+
+- response from `unlensed_total.EE` (or `unlensed_scalar.EE`)
+- total observed `EE`
+- total observed `BB` with lensing B treated as extra noise
+- instrumental `EE/BB` noise and beam/bandpass transfer
+"""
+function local_bire_qe_noise(Cℓ, Cℓn, ℓedges_α;
+                             bandpass_mask=I,
+                             beamFWHM=0,
+                             white_level=1e-8,
+                             max_bin_factor=100)
+    ℓ = collect(Cℓ.total.EE.ℓ)
+    T = promote_type(eltype(Cℓ.total.EE.Cℓ), eltype(Cℓn.EE.Cℓ), Float64)
+
+    TF² = T.(beamCℓs(beamFWHM=beamFWHM, ℓmax=maximum(ℓ))[ℓ])
+    if bandpass_mask isa DiagOp{<:BandPass}
+        TF² .*= T.(nan2zero.(diag(bandpass_mask).Wℓ[ℓ]))
+    end
+
+    CEE_resp_src = hasproperty(Cℓ, :unlensed_total) ? Cℓ.unlensed_total.EE : Cℓ.unlensed_scalar.EE
+    CEE_resp = T.(nan2zero.(CEE_resp_src[ℓ]))
+    CEE_tot = @. max(TF² * T(nan2zero(Cℓ.total.EE[ℓ])) + T(nan2zero(Cℓn.EE[ℓ])), eps(T))
+    CBB_tot = @. max(TF² * T(nan2zero(Cℓ.total.BB[ℓ])) + T(nan2zero(Cℓn.BB[ℓ])), eps(T))
+
+    # For small rotations, B ~ 2 α E, so the local response scales like 4 E^2.
+    numer = @. (8T(π) / (2T(ℓ) + 1)) * CEE_tot * CBB_tot
+    denom = @. max(4T(1) * TF²^2 * CEE_resp^2, eps(T))
+    raw = @. numer / denom
+
+    ℓmin_use = T(first(ℓedges_α))
+    ℓmax_use = T(last(ℓedges_α))
+    support = map(eachindex(ℓ)) do i
+        isfinite(raw[i]) && raw[i] > 0 && TF²[i] > 0 && ℓ[i] >= ℓmin_use && ℓ[i] <= ℓmax_use
+    end
+    support_vals = raw[support]
+    raw_ref = isempty(support_vals) ? T(white_level) : T(median(support_vals))
+    raw_ref = max(raw_ref, eps(T))
+
+    bin_factor = fill(T(1), length(ℓedges_α) - 1)
+    max_factor = T(max_bin_factor)
+    for b in eachindex(bin_factor)
+        ℓlo = T(ℓedges_α[b])
+        ℓhi = T(ℓedges_α[b + 1])
+        inbin = map(eachindex(ℓ)) do i
+            isfinite(raw[i]) && raw[i] > 0 && TF²[i] > 0 && ℓ[i] >= ℓlo && ℓ[i] < ℓhi
+        end
+        vals = raw[inbin]
+        if !isempty(vals)
+            factor = T(median(vals) / raw_ref)
+            bin_factor[b] = clamp(factor, T(1), max_factor)
+        end
+    end
+
+    white = T(white_level)
+    Nαℓ = fill(white * max_factor, length(ℓ))
+    for (i, L) in pairs(ℓ)
+        if L < ℓedges_α[1]
+            Nαℓ[i] = white * bin_factor[1]
+            continue
+        end
+        assigned = false
+        for b in eachindex(bin_factor)
+            if ℓedges_α[b] <= L < ℓedges_α[b + 1]
+                Nαℓ[i] = white * bin_factor[b]
+                assigned = true
+                break
+            end
+        end
+        if !assigned && L == ℓedges_α[end]
+            Nαℓ[i] = white * bin_factor[end]
+        end
+    end
+
+    Cℓs(ℓ, T.(Nαℓ))
+end
+
 @doc doc"""
 
     load_sim(;kwargs...)
@@ -309,6 +399,7 @@ function load_sim(;
     G = nothing,
     J = nothing,
     Nϕ_fac = 2,
+    qe_noise = false,
     L = LenseFlow,
 
 )
@@ -396,9 +487,18 @@ function load_sim(;
     Cα_base = Cℓ_to_Cov(:I, proj, (Cαα_struct, ℓedges_α, :Aα))
     Cα = ParamDependentOp((;Aα=Aα₀, _...)->Cα_base(Aα=Aα))
 
-    # α white noise with sigma=1e-4
-    σ² = 1e-8
-    Nα = Cℓ_to_Cov(:I, proj, Cℓs(ℓ, fill(σ², length(ℓ))))
+    if qe_noise
+        # Cheap pseudo-QE noise for anisotropic birefringence, kept deliberately
+        # local and simple so it behaves more like the lensing setup without
+        # adding expensive preprocessing. The result is anchored to the original
+        # white-noise level so it cannot become more optimistic than the stable
+        # baseline at any L.
+        Nα = Cℓ_to_Cov(:I, proj, local_bire_qe_noise(Cℓ, Cℓn, ℓedges_α; bandpass_mask, beamFWHM))
+    else
+        # α white noise with sigma=1e-4
+        σ² = 1e-8
+        Nα = Cℓ_to_Cov(:I, proj, Cℓs(ℓ, fill(σ², length(ℓ))))
+    end
     
     # data mask
     if (M == nothing)

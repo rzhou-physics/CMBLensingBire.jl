@@ -20,7 +20,7 @@ function argmaxf_logpdf(
     d = ds.d;
     fstart = nothing, 
     preconditioner = :diag, 
-    conjgrad_kwargs = (tol=1e-1,nsteps=500),
+    conjgrad_kwargs = (tol=1e-2,nsteps=500),
     offset = false,
 )
     
@@ -126,7 +126,7 @@ function MAP_joint(
     prior_deprojection_factor = 0,
     nburnin_update_hessian = Inf,
     progress::Bool = true,
-    conjgrad_kwargs = (tol=1e-1, nsteps=500),
+    conjgrad_kwargs = (tol=1e-2, nsteps=500),
     quasi_sample = false,
     history_keys = (:logpdf,),
     aggressive_gc = false,
@@ -144,6 +144,7 @@ function MAP_joint(
 
     dsθ = copy(ds(θ))
     dsθ.G = I # MAP estimate is invariant to G so avoid wasted computation
+    dsθ.J = I
 
     
     history = []
@@ -287,7 +288,7 @@ function MAP_marg(
     ϕstart = nothing,
     nsteps = 10, 
     nsteps_with_meanfield_update = 4,
-    conjgrad_kwargs = (tol=1e-1,nsteps=500),
+    conjgrad_kwargs = (tol=1e-2,nsteps=500),
     α = 0.2,
     weights = :unlensed, 
     Nsims = 50,
