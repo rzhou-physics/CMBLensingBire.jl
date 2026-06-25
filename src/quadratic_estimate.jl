@@ -1,4 +1,4 @@
-export quadratic_estimate
+export quadratic_estimate, birefringence_quadratic_estimate, joint_quadratic_estimate
 
 """
 
@@ -45,6 +45,92 @@ function quadratic_estimate(
 end
 
 quadratic_estimate(ds::DataSet, args...; kwargs...) = quadratic_estimate((ds,ds), args...; kwargs...)
+
+"""
+    birefringence_quadratic_estimate(ds; weights=:unlensed)
+
+Compute the unnormalised EB quadratic field for anisotropic birefringence.
+For a small rotation, `B ≃ 2αE`; the EB estimator uses the spin-2
+`cos(2Δφ)` angular kernel. Its response and noise are intentionally left to
+Monte Carlo calibration by the caller, since the data mask, lensing, and
+rotation all affect them.
+"""
+function birefringence_quadratic_estimate(
+    (ds₁, ds₂)::NTuple{2, DataSet};
+    weights=:unlensed,
+)
+    @assert weights in (:lensed, :unlensed) "weights must be :lensed or :unlensed"
+    @assert (ds₁.Cf === ds₂.Cf && ds₁.Cf̃ === ds₂.Cf̃ && ds₁.Cn̂ === ds₂.Cn̂ &&
+             ds₁.B̂ === ds₂.B̂) "operators in ds₁ and ds₂ must match"
+    @unpack Cf, Cf̃, Cn̂, B̂, M̂ = ds₁()
+    TF = (M̂ * B̂)[:P]
+    birefringence_quadratic_estimate((ds₁.d[:P], ds₂.d[:P]), Cf[:P], Cf̃[:P], Cn̂[:P], TF; weights)
+end
+
+# birefringence_quadratic_estimate(ds::DataSet; kwargs...) =
+#     birefringence_quadratic_estimate((ds, ds); kwargs...)
+
+# function birefringence_quadratic_estimate(
+#     (d₁, d₂)::NTuple{2, FlatS2}, Cf, Cf̃, Cn, TF;
+#     weights=:unlensed,
+# )
+#     CE = ((weights == :unlensed) ? Cf : Cf̃)[:E]
+#     ΣEtot = TF[:E]^2 * Cf̃[:E] + Cn[:E]
+#     ΣBtot = TF[:B]^2 * Cf̃[:B] + Cn[:B]
+
+#     E_f = CE * (ΣEtot \ (TF * d₁)[:E])
+#     B_f =      ΣBtot \ (TF * d₂)[:B]
+
+#     QE = QE_leg(E_f, 1, 1) - QE_leg(E_f, 2, 2)
+#     UE = 2 * QE_leg(E_f, 1, 2)
+#     QB = QE_leg(B_f, 1, 1) - QE_leg(B_f, 2, 2)
+#     UB = 2 * QE_leg(B_f, 1, 2)
+#     αqe = 2 * Fourier(QE * QB + UE * UB)
+
+#     Memoization.empty_cache!(QE_leg)
+
+#     (; αqe)
+# end
+
+function birefringence_quadratic_estimate(
+    (d₁, d₂)::NTuple{2, FlatS2}, Cf, Cf̃, Cn, TF;
+    weights=:unlensed,
+)
+    CE = ((weights == :unlensed) ? Cf : Cf̃)[:E]
+    ΣEtot = TF[:E]^2 * Cf̃[:E] + Cn[:E]
+    ΣBtot = TF[:B]^2 * Cf̃[:B] + Cn[:B]
+    E_f = CE * (ΣEtot \ (TF * d₁)[:E])
+    B_f =       ΣBtot \ (TF * d₂)[:B]
+
+    # cos(2φ) and sin(2φ) projected scalar legs
+    cE = QE_leg(E_f, 1, 1) - QE_leg(E_f, 2, 2)
+    sE = 2 * QE_leg(E_f, 1, 2)
+    cB = QE_leg(B_f, 1, 1) - QE_leg(B_f, 2, 2)
+    sB = 2 * QE_leg(B_f, 1, 2)
+
+    # 2 cos[2(φ_E - φ_B)] = 2(cE cB + sE sB)
+    αqe = 2 * Fourier(cE * cB + sE * sB)
+    Memoization.empty_cache!(QE_leg)
+    (; αqe)
+
+end
+
+"""
+    joint_quadratic_estimate(ds; phi_weights=:unlensed, alpha_weights=:unlensed,
+                             wiener_filtered=false)
+
+Return simultaneous raw lensing and birefringence EB quadratic fields from the
+same data. The lensing member is the established `quadratic_estimate` output;
+the birefringence member is `birefringence_quadratic_estimate`.
+"""
+function joint_quadratic_estimate(ds::DataSet;
+                                  phi_weights=:unlensed,
+                                  alpha_weights=:unlensed,
+                                  wiener_filtered=false)
+    ϕ = quadratic_estimate(ds, :EB; weights=phi_weights, wiener_filtered)
+    α = birefringence_quadratic_estimate(ds; weights=alpha_weights)
+    (; ϕ, α)
+end
 
 
 @doc doc"""
