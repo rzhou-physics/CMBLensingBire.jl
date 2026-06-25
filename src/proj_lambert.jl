@@ -481,7 +481,7 @@ function get_Cℓ(f₁::LambertS0, f₂::LambertS0=f₁; Δℓ=50, ℓedges=0:Δ
     ))
     w = @. nan2zero((2*Cℓfid(L)^2/(2L+1))^-1)
     
-    sum_in_ℓbins(x) = Float64.(fit(Histogram, L, Weights(x), ℓedges).weights)
+    sum_in_ℓbins(x) = Float64.(fit(Histogram, L, Weights(collect(Float64, x)), ℓedges).weights)
 
     local A, Cℓ, ℓ, N, Cℓ²
     Threads.@sync begin

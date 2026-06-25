@@ -67,30 +67,8 @@ function birefringence_quadratic_estimate(
     birefringence_quadratic_estimate((ds₁.d[:P], ds₂.d[:P]), Cf[:P], Cf̃[:P], Cn̂[:P], TF; weights)
 end
 
-# birefringence_quadratic_estimate(ds::DataSet; kwargs...) =
-#     birefringence_quadratic_estimate((ds, ds); kwargs...)
-
-# function birefringence_quadratic_estimate(
-#     (d₁, d₂)::NTuple{2, FlatS2}, Cf, Cf̃, Cn, TF;
-#     weights=:unlensed,
-# )
-#     CE = ((weights == :unlensed) ? Cf : Cf̃)[:E]
-#     ΣEtot = TF[:E]^2 * Cf̃[:E] + Cn[:E]
-#     ΣBtot = TF[:B]^2 * Cf̃[:B] + Cn[:B]
-
-#     E_f = CE * (ΣEtot \ (TF * d₁)[:E])
-#     B_f =      ΣBtot \ (TF * d₂)[:B]
-
-#     QE = QE_leg(E_f, 1, 1) - QE_leg(E_f, 2, 2)
-#     UE = 2 * QE_leg(E_f, 1, 2)
-#     QB = QE_leg(B_f, 1, 1) - QE_leg(B_f, 2, 2)
-#     UB = 2 * QE_leg(B_f, 1, 2)
-#     αqe = 2 * Fourier(QE * QB + UE * UB)
-
-#     Memoization.empty_cache!(QE_leg)
-
-#     (; αqe)
-# end
+birefringence_quadratic_estimate(ds::DataSet; kwargs...) =
+    birefringence_quadratic_estimate((ds, ds); kwargs...)
 
 function birefringence_quadratic_estimate(
     (d₁, d₂)::NTuple{2, FlatS2}, Cf, Cf̃, Cn, TF;
