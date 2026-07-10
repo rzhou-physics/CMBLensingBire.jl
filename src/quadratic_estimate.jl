@@ -1,5 +1,9 @@
 export quadratic_estimate, birefringence_quadratic_estimate, joint_quadratic_estimate
 
+#
+# Public lensing QE wrapper
+#
+
 """
 
     quadratic_estimate(ds::DataSet, which; wiener_filtered=true)
@@ -46,219 +50,325 @@ end
 
 quadratic_estimate(ds::DataSet, args...; kwargs...) = quadratic_estimate((ds,ds), args...; kwargs...)
 
+#
+# Birefringence QE
+#
+
 """
-    birefringence_quadratic_estimate(ds; weights=:unlensed)
+    birefringence_quadratic_estimate(ds; weights=:unlensed, zeroB=false)
 
 Compute the unnormalised EB quadratic field for anisotropic birefringence.
-For a small rotation, `B ≃ 2αE`; the EB estimator uses the spin-2
-`cos(2Δφ)` angular kernel. Its response and noise are intentionally left to
-Monte Carlo calibration by the caller, since the data mask, lensing, and
-rotation all affect them.
+
+For a small polarization rotation,
+
+    Q ± iU -> (Q ± iU) exp(±2iα),
+
+the EB response is
+
+    f_EB^α(l₁,l₂) = 2 [C_EE(l₁) - C_BB(l₂)] cos(2(φ₁-φ₂)).
+
+This function returns the raw, unnormalised quadratic field. Its response,
+noise, and possible lensing cross-response should be calibrated by Monte Carlo
+or by a separately supplied response matrix.
 """
 function birefringence_quadratic_estimate(
     (ds₁, ds₂)::NTuple{2, DataSet};
     weights=:unlensed,
+    zeroB=false,
 )
     @assert weights in (:lensed, :unlensed) "weights must be :lensed or :unlensed"
     @assert (ds₁.Cf === ds₂.Cf && ds₁.Cf̃ === ds₂.Cf̃ && ds₁.Cn̂ === ds₂.Cn̂ &&
              ds₁.B̂ === ds₂.B̂) "operators in ds₁ and ds₂ must match"
+
     @unpack Cf, Cf̃, Cn̂, B̂, M̂ = ds₁()
     TF = (M̂ * B̂)[:P]
-    birefringence_quadratic_estimate((ds₁.d[:P], ds₂.d[:P]), Cf[:P], Cf̃[:P], Cn̂[:P], TF; weights)
+
+    birefringence_quadratic_estimate(
+        (ds₁.d[:P], ds₂.d[:P]),
+        Cf[:P], Cf̃[:P], Cn̂[:P], TF;
+        weights,
+        zeroB,
+    )
 end
 
 birefringence_quadratic_estimate(ds::DataSet; kwargs...) =
     birefringence_quadratic_estimate((ds, ds); kwargs...)
 
+
 function birefringence_quadratic_estimate(
-    (d₁, d₂)::NTuple{2, FlatS2}, Cf, Cf̃, Cn, TF;
+    (d₁, d₂)::NTuple{2, FlatS2},
+    Cf, Cf̃, Cn, TF;
     weights=:unlensed,
+    zeroB=false,
 )
-    CE = ((weights == :unlensed) ? Cf : Cf̃)[:E]
-    ΣEtot = TF[:E]^2 * Cf̃[:E] + Cn[:E]
-    ΣBtot = TF[:B]^2 * Cf̃[:B] + Cn[:B]
-    E_f = CE * (ΣEtot \ (TF * d₁)[:E])
-    B_f =       ΣBtot \ (TF * d₂)[:B]
+    @assert weights in (:lensed, :unlensed) "weights must be :lensed or :unlensed"
 
-    # cos(2φ) and sin(2φ) projected scalar legs
-    cE = QE_leg(E_f, 1, 1) - QE_leg(E_f, 2, 2)
-    sE = 2 * QE_leg(E_f, 1, 2)
-    cB = QE_leg(B_f, 1, 1) - QE_leg(B_f, 2, 2)
-    sB = 2 * QE_leg(B_f, 1, 2)
+    Cw = (weights == :unlensed) ? Cf : Cf̃
+    CE, CB = Cw[:E], Cw[:B]
 
-    # 2 cos[2(φ_E - φ_B)] = 2(cE cB + sE sB)
-    αqe = 2 * Fourier(cE * cB + sE * sB)
+    TF²E, TF²B = TF[:E]^2, TF[:B]^2
+    ΣEtot = TF²E * Cf̃[:E] + Cn[:E]
+    ΣBtot = TF²B * Cf̃[:B] + Cn[:B]
+
+    E₁ = (ΣEtot \ (TF * d₁)[:E])
+    B₂ = (ΣBtot \ (TF * d₂)[:B])
+
+    # First response term:
+    #   + 2 C_EE(l_E) cos(2Δφ) E(l_E) B(l_B)
+    E_CE = CE * E₁
+    B_id = B₂
+
+    cE_CE = QE_leg(E_CE, 1, 1) - QE_leg(E_CE, 2, 2)
+    sE_CE = 2 * QE_leg(E_CE, 1, 2)
+
+    cB_id = QE_leg(B_id, 1, 1) - QE_leg(B_id, 2, 2)
+    sB_id = 2 * QE_leg(B_id, 1, 2)
+
+    term_EE = cE_CE * cB_id + sE_CE * sB_id
+
+    # Second response term:
+    #   - 2 C_BB(l_B) cos(2Δφ) E(l_E) B(l_B)
+    if zeroB
+        term_BB = 0
+    else
+        E_id = E₁
+        B_CB = CB * B₂
+
+        cE_id = QE_leg(E_id, 1, 1) - QE_leg(E_id, 2, 2)
+        sE_id = 2 * QE_leg(E_id, 1, 2)
+
+        cB_CB = QE_leg(B_CB, 1, 1) - QE_leg(B_CB, 2, 2)
+        sB_CB = 2 * QE_leg(B_CB, 1, 2)
+
+        term_BB = cE_id * cB_CB + sE_id * sB_CB
+    end
+
+    # Full EB birefringence raw field:
+    #
+    #   α_raw ∝ 2 [C_EE(l_E) - C_BB(l_B)] cos(2Δφ) E B
+    #
+    αqe = 2 * Fourier(term_EE - term_BB)
+
     Memoization.empty_cache!(QE_leg)
+
     (; αqe)
-
 end
 
-"""
-    joint_quadratic_estimate(ds; phi_weights=:unlensed, alpha_weights=:unlensed,
-                             wiener_filtered=false)
-
-Return simultaneous raw lensing and birefringence EB quadratic fields from the
-same data. The lensing member is the established `quadratic_estimate` output;
-the birefringence member is `birefringence_quadratic_estimate`.
-"""
-function joint_quadratic_estimate(ds::DataSet;
-                                  phi_weights=:unlensed,
-                                  alpha_weights=:unlensed,
-                                  wiener_filtered=false)
-    ϕ = quadratic_estimate(ds, :EB; weights=phi_weights, wiener_filtered)
-    α = birefringence_quadratic_estimate(ds; weights=alpha_weights)
-    (; ϕ, α)
-end
-
+#
+# QE leg helpers
+#
 
 @doc doc"""
 
     QE_leg(C::Diagonal, inds...)
 
-The quadratic estimate and normalization expressions all consist of
-terms involving products of two "legs", each leg which look like:
+The quadratic estimate and normalization expressions all consist of terms
+involving products of two "legs", each of the form:
 
-    C * l[i] * l̂[j] * l̂[k] * ... 
+    C * l[i] * l̂[j] * l̂[k] * ...
 
-where C is some field or diagonal covariance, l[i] is the Fourier
-wave-vector in direction i (for i=1:2), and l̂[i] = l[i]/‖l‖. For
-example, there's a leg in the EB estimator that looks like: 
+where `C` is a field or diagonal covariance, `l[i]` is the Fourier wave-vector
+in direction `i`, and `l̂[i] = l[i] / ‖l‖`. For example, an EB-estimator leg
+like
 
-    (CE * (CẼ+Cn) \ d[:E])) * l[i] * l̂[j] * l̂[k]
+    (CE * (CẼ + Cn) \ d[:E]) * l[i] * l̂[j] * l̂[k]
 
-The function `QE_leg` computes quatities like these, e.g. the above
-would be given by:
+is represented as:
 
-    QE_leg((CE * (CẼ+Cn) \ d[:E])), [i], j, k)
+    QE_leg((CE * (CẼ + Cn) \ d[:E]), [i], j, k)
 
-(where note that specifying whether its the Fourier wave-vector l
-instead of the unit-vector l̂ is done by putting that index in
-brackets).
+Putting an index in brackets selects the Fourier wave-vector `l`; a plain
+integer selects the unit-vector `l̂`.
 
-Additionally, all of these terms are symmetric in their indices, i.e.
-in `(i,j,k)` in this case. The `QE_leg` function is smart about this,
-and is memoized so that each unique set of indices is only computed
-once. This leads to a pretty drastic speedup for terms with many
-indices like those that arize in the EE and EB normalizations, and
-lets us write code which is both clear and fast without having to
-think too hard about these symmetries.
-
+The legs are symmetric in their indices. `QE_leg` memoizes each unique index
+structure, which avoids repeated work in EE and EB normalization terms.
 """
 QE_leg(C::Diagonal, inds...) = QE_leg(C.diag, inds...)
 function QE_leg(C::Field, inds...)
-    n = count((x->x isa Int),inds)
-    p₁,p₂ = (count(==(i), first.(inds)) for i=1:2)
+    n = count((x -> x isa Int), inds)
+    p₁, p₂ = (count(==(i), first.(inds)) for i = 1:2)
     QE_leg(C, (n, p₁, p₂))
 end
 @memoize function QE_leg(C::Field, (n, p₁, p₂)::Tuple)
     Map(@. nan2zero($Ð(C) * ∇[1].diag^p₁ * ∇[2].diag^p₂ / sqrt(∇².diag)^n))
 end
 ϵ(x...) = levicivita([x...])
-inds(D) = collect(product(repeated(1:2,D)...))[:]
+inds(D) = collect(product(repeated(1:2, D)...))[:]
 
-function quadratic_estimate(::Val{:TT}, (d₁,d₂)::NTuple{2,FlatS0}, Cf, Cf̃, Cn, Cϕ, TF, wiener_filtered, weights, AL=nothing)
+#
+# Lensing QE implementations
+#
+
+function quadratic_estimate(::Val{:TT}, (d₁, d₂)::NTuple{2, FlatS0}, Cf, Cf̃, Cn, Cϕ, TF, wiener_filtered, weights, AL=nothing)
 
     ΣTtot = TF^2 * Cf̃ + Cn
-    CT = (weights==:unlensed) ? Cf : Cf̃
-    
-    # unnormalized estimate
-    ϕqe_unnormalized = @subst -sum(∇[i] * Fourier(QE_leg($(ΣTtot\(TF*d₁))) * QE_leg($(CT*(ΣTtot\(TF*d₂))), [i])) for i=1:2)
-    
-    # normalization
+    CT = (weights == :unlensed) ? Cf : Cf̃
+
+    ϕqe_unnormalized = @subst -sum(∇[i] * Fourier(QE_leg($(ΣTtot \ (TF * d₁))) * QE_leg($(CT * (ΣTtot \ (TF * d₂))), [i])) for i = 1:2)
+
     if AL == nothing
         AL = @subst begin
-            A(i,j) = (
-                QE_leg($(TF^2 * CT^2 / ΣTtot), [i], [j]) * QE_leg($(TF^2      / ΣTtot)     )
-              + QE_leg($(TF^2 * CT   / ΣTtot), [i]     ) * QE_leg($(TF^2 * CT / ΣTtot), [j])
+            A(i, j) = (
+                QE_leg($(TF^2 * CT^2 / ΣTtot), [i], [j]) * QE_leg($(TF^2 / ΣTtot))
+              + QE_leg($(TF^2 * CT / ΣTtot), [i]) * QE_leg($(TF^2 * CT / ΣTtot), [j])
             )
-            pinv(Diagonal(sum(abs.(∇[i].diag .* ∇[j].diag .* Fourier(A(i,j))) for (i,j) in inds(2))))
+            pinv(Diagonal(sum(abs.(∇[i].diag .* ∇[j].diag .* Fourier(A(i, j))) for (i, j) in inds(2))))
         end
     end
-    Nϕ = AL # true only for unlensed weights
-    
+    Nϕ = AL
+
     Memoization.empty_cache!(QE_leg)
 
-    ϕqe = (wiener_filtered ? (Cϕ*pinv(Cϕ+Nϕ)) : 1) * (AL*ϕqe_unnormalized)
-    (;ϕqe, AL, Nϕ)
+    ϕqe = (wiener_filtered ? (Cϕ * pinv(Cϕ + Nϕ)) : 1) * (AL * ϕqe_unnormalized)
+    (; ϕqe, AL, Nϕ)
 
 end
 
+function quadratic_estimate(::Val{:EE}, (d₁, d₂)::NTuple{2, FlatS2}, Cf, Cf̃, Cn, Cϕ, TF, wiener_filtered, weights, AL=nothing)
 
-function quadratic_estimate(::Val{:EE}, (d₁,d₂)::NTuple{2,FlatS2}, Cf, Cf̃, Cn, Cϕ, TF, wiener_filtered, weights, AL=nothing)
-    
     TF² = TF[:E]^2
     ΣEtot = TF² * Cf̃[:E] + Cn[:E]
-    CE = ((weights==:unlensed) ? Cf : Cf̃)[:E]
+    CE = ((weights == :unlensed) ? Cf : Cf̃)[:E]
 
-    # unnormalized estimate
     ϕqe_unnormalized = @subst begin
         I(i) = -(
-            2sum(QE_leg($(CE * (ΣEtot \ (TF*d₁)[:E])), [i], j, k) * QE_leg($((ΣEtot \ (TF*d₂)[:E])), j, k) for (j,k) in inds(2))
-               - QE_leg($(CE * (ΣEtot \ (TF*d₁)[:E])), [i]      ) * QE_leg($((ΣEtot \ (TF*d₂)[:E]))      )
+            2sum(QE_leg($(CE * (ΣEtot \ (TF * d₁)[:E])), [i], j, k) * QE_leg($((ΣEtot \ (TF * d₂)[:E])), j, k) for (j, k) in inds(2))
+               - QE_leg($(CE * (ΣEtot \ (TF * d₁)[:E])), [i]) * QE_leg($((ΣEtot \ (TF * d₂)[:E])))
         )
-        sum(∇[i] * Fourier(I(i)) for i=1:2)
+        sum(∇[i] * Fourier(I(i)) for i = 1:2)
     end
 
-    # normalization
     if AL == nothing
         AL = @subst begin
-            A1(i,j) = -4 * sum( ϵ(m,p,3) * ϵ(n,q,3) * (
-                  QE_leg($(TF² * CE^2 / ΣEtot), [i], [j], k, l, m, n) .* QE_leg($(TF²      / ΣEtot),      k, l, p, q)
-                + QE_leg($(TF² * CE   / ΣEtot), [i],      k, l, m, n) .* QE_leg($(TF² * CE / ΣEtot), [j], k, l, p, q))
-                for (k,l,m,n,p,q) in inds(6)
+            A1(i, j) = -4 * sum(ϵ(m, p, 3) * ϵ(n, q, 3) * (
+                  QE_leg($(TF² * CE^2 / ΣEtot), [i], [j], k, l, m, n) .* QE_leg($(TF² / ΣEtot), k, l, p, q)
+                + QE_leg($(TF² * CE / ΣEtot), [i], k, l, m, n) .* QE_leg($(TF² * CE / ΣEtot), [j], k, l, p, q))
+                for (k, l, m, n, p, q) in inds(6)
             )
-            A2(i,j) = (
-                  QE_leg($(TF² * CE^2 / ΣEtot), [i], [j]) .* QE_leg($(TF²      / ΣEtot)     )
-                + QE_leg($(TF² * CE   / ΣEtot), [i]     ) .* QE_leg($(TF² * CE / ΣEtot), [j])
+            A2(i, j) = (
+                  QE_leg($(TF² * CE^2 / ΣEtot), [i], [j]) .* QE_leg($(TF² / ΣEtot))
+                + QE_leg($(TF² * CE / ΣEtot), [i]) .* QE_leg($(TF² * CE / ΣEtot), [j])
             )
-            pinv(Diagonal(sum(abs.(∇[i].diag .* ∇[j].diag .* Fourier(A1(i,j) + A2(i,j))) for (i,j) in inds(2))))
+            pinv(Diagonal(sum(abs.(∇[i].diag .* ∇[j].diag .* Fourier(A1(i, j) + A2(i, j))) for (i, j) in inds(2))))
         end
     end
-    Nϕ = AL # true only for unlensed weights
-    
+    Nϕ = AL
+
     Memoization.empty_cache!(QE_leg)
 
-    ϕqe = (wiener_filtered ? (Cϕ*pinv(Cϕ+Nϕ)) : 1) * (AL*ϕqe_unnormalized)
-    (;ϕqe, AL, Nϕ)
+    ϕqe = (wiener_filtered ? (Cϕ * pinv(Cϕ + Nϕ)) : 1) * (AL * ϕqe_unnormalized)
+    (; ϕqe, AL, Nϕ)
 
 end
 
+function quadratic_estimate(::Val{:EB}, (d₁, d₂)::NTuple{2, FlatS2}, Cf, Cf̃, Cn, Cϕ, TF, wiener_filtered, weights, AL=nothing; zeroB=false)
 
-function quadratic_estimate(::Val{:EB}, (d₁,d₂)::NTuple{2,FlatS2}, Cf, Cf̃, Cn, Cϕ, TF, wiener_filtered, weights, AL=nothing; zeroB=false)
-    
-    CE, CB = getindex.(Ref((weights==:unlensed) ? Cf : Cf̃),(:E,:B))
+    CE, CB = getindex.(Ref((weights == :unlensed) ? Cf : Cf̃), (:E, :B))
     TF²E, TF²B = TF[:E]^2, TF[:B]^2
     ΣEtot = TF²E * Cf̃[:E] + Cn[:E]
     ΣBtot = TF²B * Cf̃[:B] + Cn[:B]
-    
 
-    # unnormalized estimate
     ϕqe_unnormalized = @subst begin
-        I(i) = 2 * sum(  ϵ(k,l,3) * (
-                           QE_leg($(CE * (ΣEtot \ (TF*d₁)[:E])), [i], j, k) * QE_leg($(     (ΣBtot \ (TF*d₂)[:B])),      j, l)
-            - (zeroB ? 0 : QE_leg($(      ΣEtot \ (TF*d₁)[:E]),       j, k) * QE_leg($(CB * (ΣBtot \ (TF*d₂)[:B])), [i], j, l)))
-            for (j,k,l) in inds(3)
+        I(i) = 2 * sum(ϵ(k, l, 3) * (
+                           QE_leg($(CE * (ΣEtot \ (TF * d₁)[:E])), [i], j, k) * QE_leg($((ΣBtot \ (TF * d₂)[:B])), j, l)
+            - (zeroB ? 0 : QE_leg($(ΣEtot \ (TF * d₁)[:E]), j, k) * QE_leg($(CB * (ΣBtot \ (TF * d₂)[:B])), [i], j, l)))
+            for (j, k, l) in inds(3)
         )
-        sum(∇[i] * Fourier(I(i)) for i=1:2)
+        sum(∇[i] * Fourier(I(i)) for i = 1:2)
     end
 
-    # normalization
     if AL == nothing
         AL = @subst begin
-            A(i,j) = 4 * sum( ϵ(m,p,3) * ϵ(n,q,3) * (
-                                 QE_leg($(TF²E * CE^2 / ΣEtot), [i], [j], k, l, m, n) * QE_leg($(TF²B        / ΣBtot),           k, l, p, q)
-                + (zeroB ? 0 : -2QE_leg($(TF²E * CE   / ΣEtot), [i],      k, l, m, n) * QE_leg($(TF²B * CB   / ΣBtot),      [j], k, l, p, q))
-                + (zeroB ? 0 :   QE_leg($(TF²E        / ΣEtot),           k, l, m, n) * QE_leg($(TF²B * CB^2 / ΣBtot), [i], [j], k, l, p, q)))
-                for (k,l,m,n,p,q) in inds(6)
+            A(i, j) = 4 * sum(ϵ(m, p, 3) * ϵ(n, q, 3) * (
+                                 QE_leg($(TF²E * CE^2 / ΣEtot), [i], [j], k, l, m, n) * QE_leg($(TF²B / ΣBtot), k, l, p, q)
+                + (zeroB ? 0 : -2QE_leg($(TF²E * CE / ΣEtot), [i], k, l, m, n) * QE_leg($(TF²B * CB / ΣBtot), [j], k, l, p, q))
+                + (zeroB ? 0 :   QE_leg($(TF²E / ΣEtot), k, l, m, n) * QE_leg($(TF²B * CB^2 / ΣBtot), [i], [j], k, l, p, q)))
+                for (k, l, m, n, p, q) in inds(6)
             )
-            pinv(Diagonal(sum(abs.(∇[i].diag .* ∇[j].diag .* Fourier(A(i,j))) for (i,j) in inds(2))))
+            pinv(Diagonal(sum(abs.(∇[i].diag .* ∇[j].diag .* Fourier(A(i, j))) for (i, j) in inds(2))))
         end
     end
-    Nϕ = AL # true only for unlensed weights
-    
+    Nϕ = AL
+
     Memoization.empty_cache!(QE_leg)
 
-    ϕqe = (wiener_filtered ? (Cϕ*pinv(Cϕ+Nϕ)) : 1) * (AL * ϕqe_unnormalized)
-    (;ϕqe, AL, Nϕ)
+    ϕqe = (wiener_filtered ? (Cϕ * pinv(Cϕ + Nϕ)) : 1) * (AL * ϕqe_unnormalized)
+    (; ϕqe, AL, Nϕ)
 
+end
+
+#
+# Joint lensing and birefringence wrapper
+#
+
+"""
+    joint_quadratic_estimate(ds;
+        phi_weights=:unlensed,
+        alpha_weights=:unlensed,
+        wiener_filtered=false,
+        zeroB_alpha=false,
+        response=nothing,
+    )
+
+Return EB lensing and birefringence quadratic fields from the same data.
+
+If `response === nothing`, this returns the separate outputs:
+
+    ϕ = quadratic_estimate(ds, :EB; ...)
+    α = birefringence_quadratic_estimate(ds; ...)
+
+If `response` is supplied, it should be a named tuple
+
+    (; Rϕϕ, Rϕα, Rαϕ, Rαα)
+
+representing the MC-calibrated 2x2 response matrix in each L mode:
+
+    [ϕ_raw]   [Rϕϕ  Rϕα] [ϕ]
+    [α_raw] = [Rαϕ  Rαα] [α].
+
+The returned `ϕhat` and `αhat` are response-matrix-deprojected estimates.
+"""
+function joint_quadratic_estimate(
+    ds::DataSet;
+    phi_weights=:unlensed,
+    alpha_weights=:unlensed,
+    wiener_filtered=false,
+    zeroB_alpha=false,
+    response=nothing,
+)
+    ϕ = quadratic_estimate(
+        ds, :EB;
+        weights=phi_weights,
+        wiener_filtered=wiener_filtered,
+    )
+
+    α = birefringence_quadratic_estimate(
+        ds;
+        weights=alpha_weights,
+        zeroB=zeroB_alpha,
+    )
+
+    ϕraw = ϕ.ϕqe
+    αraw = α.αqe
+
+    if response === nothing
+        return (; ϕ, α)
+    end
+
+    @assert all(k -> haskey(response, k), (:Rϕϕ, :Rϕα, :Rαϕ, :Rαα)) """
+    response must be a named tuple with fields:
+        (; Rϕϕ, Rϕα, Rαϕ, Rαα)
+    """
+
+    Rϕϕ = response.Rϕϕ
+    Rϕα = response.Rϕα
+    Rαϕ = response.Rαϕ
+    Rαα = response.Rαα
+
+    detR = Rϕϕ * Rαα - Rϕα * Rαϕ
+
+    ϕhat = ( Rαα * ϕraw - Rϕα * αraw) / detR
+    αhat = (-Rαϕ * ϕraw + Rϕϕ * αraw) / detR
+
+    (; ϕhat, αhat, ϕraw, αraw, ϕ, α, response)
 end
