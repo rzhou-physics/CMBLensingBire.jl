@@ -202,3 +202,62 @@ function rrule(::Type{<:BireStatic{T}}, α::Field) where {T}
     end
     return y, pullback
 end
+
+# -----------------------------------------------------------------------------
+# Inverse (\) rules so α-gradients also flow through  R \ f  and  R' \ f.
+#
+# Without these, `\(::BireStatic, ::Field)` falls back to the generic StaticOp
+# Zygote adjoint in staticops.jl, which returns `(nothing, A' \ Δ)` and thus
+# DROPS the gradient w.r.t. α. Since `unmix` reconstructs the field via
+# `R(α) \ f_rotated`, that missing path biases the joint MAP/MUSE α-gradient.
+#
+# We reuse the (already-correct) `*` rrules via the identities
+#   R  \ f = BireStatic(-α) * f      (rotation by -α)
+#   R' \ f = R * f                   ((R')⁻¹ = R for an orthogonal rotation)
+# and chain the sign of α through.
+# -----------------------------------------------------------------------------
+
+# R \ f
+function rrule(::typeof(\), R::BireStatic, f::Field)
+    Rinv = BireStatic(-R.α)
+    y, back = rrule(*, Rinv, f)
+    function pullback(Δ)
+        _, ∂Rinv, ∂f = back(Δ)
+        # ∂/∂α = ∂/∂(-α) · d(-α)/dα = -∂Rinv.α
+        ∂R = ∂Rinv isa CRC.AbstractZero ? ZeroTangent() :
+             Tangent{typeof(R)}(α = -∂Rinv.α)
+        return (NoTangent(), ∂R, ∂f)
+    end
+    return y, pullback
+end
+
+Zygote.@adjoint function \(R::BireStatic, f::Field)
+    y, back = rrule(\, R, f)
+    function pullback(Δ)
+        _, ∂R, ∂f = back(Δ)
+        return (∂R, ∂f)
+    end
+    return y, pullback
+end
+
+# R' \ f
+function rrule(::typeof(\), Radj::Adjoint{<:Any,<:BireStatic}, f::Field)
+    R = Radj.parent
+    y, back = rrule(*, R, f)
+    function pullback(Δ)
+        _, ∂R, ∂f = back(Δ)
+        ∂Radj = ∂R isa CRC.AbstractZero ? ZeroTangent() :
+                Tangent{typeof(Radj)}(parent = ∂R)
+        return (NoTangent(), ∂Radj, ∂f)
+    end
+    return y, pullback
+end
+
+Zygote.@adjoint function \(Radj::Adjoint{<:Any,<:BireStatic}, f::Field)
+    y, back = rrule(\, Radj, f)
+    function pullback(Δ)
+        _, ∂Radj, ∂f = back(Δ)
+        return (∂Radj, ∂f)
+    end
+    return y, pullback
+end
