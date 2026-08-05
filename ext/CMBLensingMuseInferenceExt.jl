@@ -68,16 +68,17 @@ end
 function MuseInference.ẑ_at_θ(prob::CMBLensingMuseProblem, d, zguess, θ; ∇z_logLike_atol=nothing)
     @unpack ds = prob
     Ωstart = delete(NamedTuple(zguess), :f)
-    MAP = MAP_joint(mergeθ(prob, θ), @set(ds.d=d), Ωstart; fstart=zguess.f, prob.MAP_joint_kwargs...)
+    MAP = MAP_joint(mergeθ(prob, θ), @set(ds.d=d); Ωstart, fstart=zguess.f, prob.MAP_joint_kwargs...)
     LenseBasis(FieldTuple(;delete(MAP, :history)...)), MAP.history
 end
 
 function MuseInference.ẑ_at_θ(prob::CMBLensingMuseProblem{<:CMBLensing.Mixed}, d, zguess, θ; ∇z_logLike_atol=nothing)
     ds = prob.ds.ds
-    zguess = CMBLensing.unmix(ds; θ, zguess...)
+    θ_full = mergeθ(prob, θ)
+    zguess = CMBLensing.unmix(ds; θ=θ_full, zguess...)
     Ωstart = delete(NamedTuple(zguess), :f)
-    MAP = MAP_joint(Base.get_extension(CMBLensing,:CMBLensingMuseInferenceExt).mergeθ(prob, θ), @set(ds.d=d), Ωstart; fstart=zguess.f, prob.MAP_joint_kwargs...)
-    MAP = CMBLensing.mix(ds; θ, MAP...)
+    MAP = MAP_joint(θ_full, @set(ds.d=d); Ωstart, fstart=zguess.f, prob.MAP_joint_kwargs...)
+    MAP = CMBLensing.mix(ds; θ=θ_full, MAP...)
     LenseBasis(FieldTuple(;delete(MAP, (:history, :θ))...)), MAP.history
 end
 

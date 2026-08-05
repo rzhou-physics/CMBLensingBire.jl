@@ -467,6 +467,13 @@ make_mask(f::LambertField; kwargs...) = make_mask((f.Ny,f.Nx), f.θpix; kwargs..
 
 ### power spectra
 
+function _binned_standard_error(sum_w, sum_w², sum_wx, sum_wx²)
+    mean_x = sum_wx ./ sum_w
+    variance_x = max.(sum_wx² ./ sum_w .- mean_x.^2, 0)
+    n_eff = sum_w.^2 ./ sum_w² ./ 2
+    sqrt.(variance_x ./ n_eff)
+end
+
 function get_Cℓ(f₁::LambertS0, f₂::LambertS0=f₁; Δℓ=50, ℓedges=0:Δℓ:16000, Cℓfid=ℓ->1, err_estimate=false)
     @unpack Nx, Ny, Δx, ℓmag = fieldinfo(f₁)
     ℓmag = unfold(ℓmag, Ny)
@@ -483,19 +490,19 @@ function get_Cℓ(f₁::LambertS0, f₂::LambertS0=f₁; Δℓ=50, ℓedges=0:Δ
     
     sum_in_ℓbins(x) = Float64.(fit(Histogram, L, Weights(collect(Float64, x)), ℓedges).weights)
 
-    local A, Cℓ, ℓ, N, Cℓ²
+    local A, A², Cℓ, ℓ, Cℓ²
     Threads.@sync begin
         Threads.@spawn A  = sum_in_ℓbins(w)
         Threads.@spawn Cℓ = sum_in_ℓbins(w .* CLobs)
         Threads.@spawn ℓ  = sum_in_ℓbins(w .* L)
         if err_estimate
-            Threads.@spawn N   = sum_in_ℓbins(one.(w)) / 2
+            Threads.@spawn A²  = sum_in_ℓbins(w.^2)
             Threads.@spawn Cℓ² = sum_in_ℓbins(w .* CLobs.^2)
         end
     end
 
     if err_estimate
-        σℓ  = sqrt.((Cℓ² ./ A .- Cℓ.^2) ./ N)
+        σℓ  = _binned_standard_error(A, A², Cℓ, Cℓ²)
         Cℓs(ℓ./A,  Cℓ./A .± σℓ)
     else
         Cℓs(ℓ./A,  Cℓ./A)

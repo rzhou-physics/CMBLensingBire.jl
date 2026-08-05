@@ -79,7 +79,13 @@ end
 for op in (:^, :sqrt, :abs)
     @eval ($op)(ic::Cℓs, args...) = Cℓs(ic.ℓ, broadcast($op, ic.Cℓ, args...), concrete=ic.concrete)
 end
-std(x::Vector{<:Cℓs}) = sqrt(abs(mean(x.^2) - mean(x)^2))
+function std(x::AbstractVector{<:Cℓs}; corrected::Bool=true, mean=nothing)
+    n = length(x)
+    denominator = n - corrected
+    denominator > 0 || throw(ArgumentError("at least two spectra are required for corrected std"))
+    μ = isnothing(mean) ? Statistics.mean(x) : mean
+    sqrt(abs(mapreduce(y -> (y - μ)^2, +, x) / denominator))
+end
 shiftℓ(Δℓ, Cℓ; factor=false) = Cℓs(factor ? Cℓ.ℓ .* Δℓ : Cℓ.ℓ .+ Δℓ, Cℓ.Cℓ)
 
 

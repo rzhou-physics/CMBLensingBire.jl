@@ -416,8 +416,13 @@ function load_sim(;
         @warn "`rfid` will be removed in a future version. Use `fiducial_θ=(r=...,)` instead."
         fiducial_θ = merge(fiducial_θ,(r=rfid,))
     end
-    # Aϕ₀ = T(get(fiducial_θ, :Aϕ, 1))
-    fiducial_θ = Base.structdiff(fiducial_θ, NamedTuple{(:Aϕ,)}) # remove Aϕ key if present
+    Aϕ_fid = get(fiducial_θ, :Aϕ, 1)
+    Aα_fid = get(fiducial_θ, :Aα, 1)
+    Aϕ₀ = Aϕ_fid isa Number ? fill(T(Aϕ_fid), Nbins_ϕ) : T.(collect(Aϕ_fid))
+    Aα₀ = Aα_fid isa Number ? fill(T(Aα_fid), Nbins_α) : T.(collect(Aα_fid))
+    length(Aϕ₀) == Nbins_ϕ || throw(ArgumentError("fiducial Aϕ must have Nbins_ϕ=$Nbins_ϕ entries"))
+    length(Aα₀) == Nbins_α || throw(ArgumentError("fiducial Aα must have Nbins_α=$Nbins_α entries"))
+    fiducial_θ = Base.structdiff(fiducial_θ, NamedTuple{(:Aϕ, :Aα)})
     if (Cℓ == nothing)
         Cℓ = camb(;fiducial_θ..., ℓmax=ℓmax)
     else
@@ -453,7 +458,6 @@ function load_sim(;
     Cf = ParamDependentOp((;r=r₀,   _...)->(Cfs + (T(r)/r₀)*Cft))
 
     # ϕ covariance
-    Aϕ₀ = ones(T, Nbins_ϕ)
     Cϕ_base = Cℓ_to_Cov(:I, proj, (Cℓ.total.ϕϕ, ℓedges_ϕ, :Aϕ))
     Cϕ = ParamDependentOp((;Aϕ=Aϕ₀, _...)->Cϕ_base(Aϕ=Aϕ))
 
@@ -461,7 +465,6 @@ function load_sim(;
     ℓ = Cℓ.total.ϕϕ.ℓ
     Cαα_ℓ = (0.1e-4) * (2π) ./ (ℓ .* (ℓ .+ 1) .+ eps())
     Cαα_struct = Cℓs(ℓ, Cαα_ℓ)
-    Aα₀ = ones(T, Nbins_α)
     Cα_base = Cℓ_to_Cov(:I, proj, (Cαα_struct, ℓedges_α, :Aα))
     Cα = ParamDependentOp((;Aα=Aα₀, _...)->Cα_base(Aα=Aα))
 
@@ -572,7 +575,7 @@ function load_sim(;
     end
     
     # return (;f, f̃, ϕ, d, ds, ds₀=ds(), Cℓ, proj)
-    return (;f, f̃, ϕ, α, d, ds, ds₀=ds(), Cℓ, proj)
+    return (;f, f̃, ϕ, α, d, ds, ds₀=ds(), Cℓ, Cαα=Cαα_struct, proj)
     
 end
 
@@ -584,12 +587,12 @@ function load_nolensing_sim(;
     kwargs...
 )
     # @unpack f, f̃, ϕ, ds, ds₀, Cℓ, proj = load_sim(; L, kwargs...)
-    @unpack f, f̃, ϕ, α, ds, ds₀, Cℓ, proj = load_sim(; L, kwargs...)
+    @unpack f, f̃, ϕ, α, ds, ds₀, Cℓ, Cαα, proj = load_sim(; L, kwargs...)
     @unpack d, Cf, Cf̃, Cn, Cn̂, M, M̂, B, B̂ = ds
     Cf_nl = lensed_covariance ? Cf̃ : Cf
     ds_nl = NoLensingDataSet(; d, Cf=Cf_nl, Cn, Cn̂, M, M̂, B, B̂)
     # (;f, f̃, ϕ, ds=ds_nl, ds₀=ds_nl(), Cℓ, proj)
-    (;f, f̃, ϕ, α, ds=ds_nl, ds₀=ds_nl(), Cℓ, proj)
+    (;f, f̃, ϕ, α, ds=ds_nl, ds₀=ds_nl(), Cℓ, Cαα, proj)
 end
 
 

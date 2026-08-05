@@ -1,4 +1,26 @@
 
+## joint-MAP numerical robustness helpers
+#
+# The joint (f,ϕ,α) coordinate descent can, at low S/N (most often for the α
+# field on small maps), take a line-search step that drives the mixed field to a
+# non-finite value. Left unchecked, that poisoned field flows into the next inner
+# Wiener CG solve, whose initial residual becomes NaN and trips
+# `@assert !isnan(res)` in `conjugate_gradient`, aborting the whole job. These
+# helpers let `MAP_joint` detect and back off such steps instead of diverging.
+
+# GPU-safe finiteness test for a Field / FieldTuple: any Inf/NaN element makes the
+# L2 norm non-finite, and `norm` reduces without scalar indexing.
+_field_isfinite(x) = isfinite(Float64(norm(x)))
+
+# Toggle a compact per-step trace of the joint MAP (norms + finiteness). Read once
+# at load; off in production. Enable with e.g. `MAP_VERBOSE=1` in the environment.
+const _MAP_VERBOSE = Ref(lowercase(get(ENV, "MAP_VERBOSE", "0")) in ("1", "true", "yes", "on"))
+# Guard the joint-MAP field update against non-finite line-search steps. On by
+# default (a no-op for healthy runs); set `MAP_GUARD=0` to recover the old,
+# divergence-prone behavior for A/B testing.
+const _MAP_GUARD = Ref(!(lowercase(get(ENV, "MAP_GUARD", "1")) in ("0", "false", "no", "off")))
+
+
 ## wiener filter
 
 @doc doc"""
@@ -35,7 +57,11 @@ function argmaxf_logpdf(
         a₀ =  gradientf_logpdf(ds; f=zero_f, d=zero(d), Ω...)
         offset && (b += a₀)
         Hess = FuncOp(f -> (gradientf_logpdf(ds; f, d=zero(d), Ω...) - a₀))
-        conjugate_gradient(Hess_preconditioner, Hess, b, (isnothing(fstart) ? zero_f : fstart); conjgrad_kwargs...)
+        # A non-finite warm start (from a previous divergent MAP step) would make
+        # the CG initial residual NaN and trip `@assert !isnan(res)`; fall back to
+        # a cold start in that case.
+        x₀ = (isnothing(fstart) || !_field_isfinite(fstart)) ? zero_f : fstart
+        conjugate_gradient(Hess_preconditioner, Hess, b, x₀; conjgrad_kwargs...)
 
     end
 
@@ -228,14 +254,37 @@ function MAP_joint(
                 ΔΩ°_perp = pinv(HΩ°) * gradient(ΔΩ° -> logprior(dsθ; unmix(dsθ; f°, ΔΩ°...)...), ΔΩ°)[1]
                 ΔΩ° .-= T(prior_deprojection_factor * dot(ΔΩ°,ΔΩ°_perp) * pinv(dot(ΔΩ°_perp,ΔΩ°_perp))) .* ΔΩ°_perp
             end
-            αmax = @something(αmax_initial, 2α)
+            # Cap the auto trust-region so a step that keeps hitting the boundary
+            # can't double αmax without bound (2α → 4 → 8 → …) and march the field
+            # off to overflow over a handful of steps. A no-op once α settles ≈1.
+            αmax = @something(αmax_initial, min(2α, T(10)))
             soln = @ondemand(Optim.optimize)(T(0), T(αmax), @ondemand(Optim.Brent)(); abs_tol=T(αtol)) do α
                 Ω°′ = Ω° + T(α) * ΔΩ°
                 total_logpdf = @⌛(sum(unbatch(-(logpdf(Mixed(dsθ); f°, Ω°′..., θ)))))
                 isnan(total_logpdf) ? T(α/αmax) * prevfloat(T(Inf)) : total_logpdf # workaround for https://github.com/JuliaNLSolvers/Optim.jl/issues/828
             end
             α = T(soln.minimizer)
-            Ω° += α * ΔΩ°
+            # Robust field update: back off (or, as a last resort, reject) a step
+            # that would drive the mixed field non-finite, so it can't poison the
+            # next inner Wiener CG solve (whose NaN residual trips
+            # `@assert !isnan(res)` and kills the run). A no-op for healthy steps;
+            # `MAP_GUARD=0` restores the old, divergence-prone update.
+            if _MAP_GUARD[]
+                if !_field_isfinite(ΔΩ°)
+                    α = zero(T)                       # search direction diverged
+                else
+                    Ω°_next = Ω° + α * ΔΩ°
+                    nbacktrack = 0
+                    while !_field_isfinite(Ω°_next) && nbacktrack < 30
+                        α /= 2
+                        Ω°_next = Ω° + α * ΔΩ°
+                        nbacktrack += 1
+                    end
+                    _field_isfinite(Ω°_next) ? (Ω° = Ω°_next) : (α = zero(T))
+                end
+            else
+                Ω° += α * ΔΩ°
+            end
         end
         
         ## finalize
@@ -253,7 +302,18 @@ function MAP_joint(
         ]
         next!(pbar; showvalues)
         push!(history, select((;f°,f,Ω°...,Ω...,∇Ω°_logpdf,total_logpdf,α,αmax,ΔΩ°,ΔΩ°_norm,logpdf=_logpdf,HΩ°,argmaxf_logpdf_history), history_keys))
-        
+
+        if _MAP_VERBOSE[]
+            _cgres = isempty(argmaxf_logpdf_history) ? NaN : Float64(argmaxf_logpdf_history[end].res)
+            @printf("  [MAP step %2d] ls_α=%.3g αmax=%.3g |ΔΩ°|=%.3g |ϕ°|=%.3g |α°|=%.3g |f|=%.3g logpdf=%.5g CG=%d res=%.2g fin(f,ϕ°,α°)=%d%d%d\n",
+                step, Float64(α), Float64(αmax), Float64(ΔΩ°_norm),
+                Float64(norm(Ω°.ϕ°)), Float64(norm(Ω°.α°)), Float64(norm(f)),
+                Float64(total_logpdf), length(argmaxf_logpdf_history), _cgres,
+                Int(_field_isfinite(f)), Int(_field_isfinite(Ω°.ϕ°)), Int(_field_isfinite(Ω°.α°)))
+            flush(stdout)
+        end
+
+
         # early stop based on tolerance
         if (step > minsteps) && (norm(ΔΩ°) < gradtol)
             break

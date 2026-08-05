@@ -10,7 +10,7 @@
 #   julia --project=. test/test_birestatic_grad.jl
 # (switch storage=CuArray below if you want to check the GPU path too).
 
-using CMBLensing, Zygote, LinearAlgebra, Random, Printf
+using CMBLensing, PythonPlot, Zygote, LinearAlgebra, Random, Printf
 using Distributions: logpdf
 
 # ---- small CPU sim to obtain consistent (f, ϕ, α, ds) -----------------------
