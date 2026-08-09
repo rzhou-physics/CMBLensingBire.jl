@@ -331,6 +331,155 @@ end
 
 MAP_joint(θ, ds::NoLensingDataSet; kwargs...) = (argmaxf_logpdf(I, θ, ds; kwargs...), nothing)
 
+"""
+    MAP_phi_only([θ], ds::BaseDataSet; kwargs...)
+
+Run a true lensing-only MAP on a birefringence-capable dataset.  The alpha
+latent field is fixed exactly to zero and is never included in the coordinate
+descent; the optimization variables are only `(f, ϕ)`.  The returned object
+also carries that fixed zero field as `α` so callers can share bookkeeping with
+the joint path.
+"""
+MAP_phi_only(ds::DataSet, args...; kwargs...) = MAP_phi_only((;), ds, args...; kwargs...)
+function MAP_phi_only(
+    θ,
+    ds::DataSet;
+    Ωstart=(ϕ=Map(zero(diag(ds.Cϕ))),),
+    nsteps=20,
+    minsteps=0,
+    fstart=nothing,
+    αtol=1e-4,
+    gradtol=0,
+    αmax=nothing,
+    prior_deprojection_factor=0,
+    nburnin_update_hessian=Inf,
+    progress::Bool=true,
+    conjgrad_kwargs=(tol=1e-2, nsteps=500),
+    quasi_sample=false,
+    history_keys=(:logpdf,),
+    aggressive_gc=false,
+)
+    keys((;Ωstart...,)) == (:ϕ,) ||
+        throw(ArgumentError("MAP_phi_only Ωstart must contain only ϕ"))
+
+    sample_or_argmax_f =
+        quasi_sample == false ? argmaxf_logpdf :
+        quasi_sample == true ? sample_f :
+        quasi_sample isa AbstractRNG ?
+            (args...; kwargs...) -> sample_f(copy(quasi_sample), args...; kwargs...) :
+        error("`quasi_sample` should be false, true, or an AbstractRNG")
+
+    dsθ = copy(ds(θ))
+    dsθ.G = I
+    dsθ.J = I
+    αzero = Map(zero(diag(dsθ.Cα)))
+
+    history = []
+    pbar = Progress(nsteps, (progress ? 0 : Inf), "MAP_phi_only: ")
+    ProgressMeter.update!(pbar)
+
+    prevϕ° = prev_∇ϕ°_logpdf = Hϕ° = showvalues = nothing
+    Ω = (;Ωstart...)
+    f = prevf = fstart
+    line_step = 1.0
+    αmax_initial = αmax
+    stop_after_step = false
+
+    for step = 1:nsteps
+        t_f = @elapsed begin
+            (f, argmaxf_logpdf_history) = @⌛ sample_or_argmax_f(
+                dsθ,
+                (;ϕ=Ω.ϕ, α=αzero, θ);
+                fstart=prevf,
+                conjgrad_kwargs=(history_keys=(:i,:res), progress=false, conjgrad_kwargs...)
+            )
+            aggressive_gc && cuda_gc()
+        end
+
+        t_ϕ = @elapsed begin
+            mixed = mix(dsθ; f, ϕ=Ω.ϕ, α=αzero, θ)
+            f° = mixed.f°
+            ϕ° = mixed.ϕ°
+            Ωϕ° = FieldTuple(ϕ°=ϕ°)
+            ∇Ωϕ°_logpdf, = @⌛ gradient(
+                Ωϕ°_var -> logpdf(Mixed(dsθ); f°=f°, Ωϕ°_var..., α°=αzero, θ),
+                Ωϕ°)
+            ∇ϕ°_logpdf = ∇Ωϕ°_logpdf.ϕ°
+
+            if step > nburnin_update_hessian
+                Hϕ⁻¹_unsmooth = Diagonal(abs.(
+                    Fourier(ϕ° - prevϕ°) ./ Fourier(∇ϕ°_logpdf - prev_∇ϕ°_logpdf)))
+                Hϕ⁻¹_smooth = Cℓ_to_Cov(:I, f.proj,
+                    smooth(ℓ⁴ * cov_to_Cℓ(Hϕ⁻¹_unsmooth),
+                        xscale=:log, yscale=:log, smoothing=0.05) / ℓ⁴)
+                Hϕ° = Diagonal(FieldTuple(ϕ°=diag(pinv(Hϕ⁻¹_smooth))))
+            elseif Hϕ° === nothing
+                Hϕ° = Hessian_logpdf_preconditioner((:ϕ°,), dsθ)
+            end
+
+            ΔΩϕ° = pinv(Hϕ°) * ∇Ωϕ°_logpdf
+            Δϕ° = ΔΩϕ°.ϕ°
+            T = real(eltype(f))
+            prior_deprojection_factor == 0 ||
+                throw(ArgumentError("prior_deprojection_factor is not implemented for MAP_phi_only"))
+            αmax_step = @something(αmax_initial, min(2line_step, T(10)))
+            soln = @ondemand(Optim.optimize)(T(0), T(αmax_step), @ondemand(Optim.Brent)();
+                abs_tol=T(αtol)) do trial
+                ϕ°′ = ϕ° + T(trial) * Δϕ°
+                total_logpdf = @⌛ sum(unbatch(-logpdf(Mixed(dsθ);
+                    f°=f°, ϕ°=ϕ°′, α°=αzero, θ)))
+                isnan(total_logpdf) ? T(trial / αmax_step) * prevfloat(T(Inf)) : total_logpdf
+            end
+            line_step = T(soln.minimizer)
+            ϕ°_next = ϕ° + line_step * Δϕ°
+            if _MAP_GUARD[]
+                if !_field_isfinite(Δϕ°)
+                    line_step = zero(T)
+                    ϕ°_next = ϕ°
+                else
+                    nbacktrack = 0
+                    while !_field_isfinite(ϕ°_next) && nbacktrack < 30
+                        line_step /= 2
+                        ϕ°_next = ϕ° + line_step * Δϕ°
+                        nbacktrack += 1
+                    end
+                    if !_field_isfinite(ϕ°_next)
+                        line_step = zero(T)
+                        ϕ°_next = ϕ°
+                    end
+                end
+            end
+
+            unmixed = unmix(dsθ; f°=f°, ϕ°=ϕ°_next, α°=αzero, θ)
+            Ω = (ϕ=unmixed.ϕ,)
+            _logpdf = @⌛ logpdf(Mixed(dsθ); f°=f°, ϕ°=ϕ°_next, α°=αzero, θ)
+            Δϕ°_norm = norm(line_step * Δϕ°)
+            total_logpdf = sum(unbatch(_logpdf))
+            showvalues = [
+                ("step", step),
+                ("logpdf", join(map(x -> @sprintf("%.2f", x), [unbatch(_logpdf)...]), ", ")),
+                ("α", line_step),
+                ("ΔΩ°_norm", @sprintf("%.2g", Δϕ°_norm)),
+                ("CG", "$(length(argmaxf_logpdf_history)) iterations ($(@sprintf("%.2f", t_f)) sec)"),
+                ("Linesearch", "$(soln.iterations) bisections"),
+            ]
+            next!(pbar; showvalues)
+            push!(history, select((;f°, f, ϕ°=ϕ°_next, ϕ=Ω.ϕ,
+                α=line_step, α°=αzero, ∇Ω°_logpdf=∇ϕ°_logpdf,
+                total_logpdf, ΔΩ°=line_step * Δϕ°, ΔΩ°_norm=Δϕ°_norm,
+                logpdf=_logpdf, HΩ°=Hϕ°, argmaxf_logpdf_history), history_keys))
+
+            stop_after_step = (step > minsteps) && (Δϕ°_norm < gradtol)
+            prevf, prevϕ°, prev_∇ϕ°_logpdf = f, ϕ°_next, ∇ϕ°_logpdf
+        end
+        stop_after_step && break
+    end
+
+    ProgressMeter.finish!(pbar)
+    ProgressMeter.updateProgress!(pbar; showvalues)
+    (;f, ϕ=Ω.ϕ, α=αzero, history)
+end
+
 
 @doc doc"""
 

@@ -101,7 +101,7 @@ export
     get_Cℓ, get_Cℓ, get_Dℓ, get_ρℓ, get_ℓ⁴Cℓ, gpu, gradhess, gradient, HighPass,
     IEBFourier, IEBMap, Cℓs, IQUAzFourier, IQUFourier, IQUMap, kde,
     lasthalf, LazyBinaryOp, LenseBasis, LenseFlow, FieldOp, logpdf, load_camb_Cℓs,
-    load_chains, load_nolensing_sim, load_sim, LowPass, make_mask, Map, MAP_joint, MAP_marg,
+    load_chains, load_nolensing_sim, load_sim, LowPass, make_mask, Map, MAP_joint, MAP_phi_only, MAP_marg,
     mean_std_and_errors, MidPass, mix, Mixed, nan2zero, noiseCℓs,
     ParamDependentOp, pixwin, PowerLens, precompute!!, ProjLambert, ProjEquiRect, ProjHealpix, project,
     QUAzFourier, QUFourier, QUMap, RK4Solver, sample_f, sample_joint, shiftℓ, 
